@@ -1,0 +1,7 @@
+{
+  "buildCommand": "cd brians-journal && npm install && npm run build",
+  "outputDirectory": "brians-journal/dist",
+  "installCommand": "cd brians-journal && npm install",
+  "devCommand": "cd brians-journal && npm run dev",
+  "framework": "vite"
+}
