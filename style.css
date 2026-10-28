@@ -281,6 +281,16 @@ body.dark .setting-icon{background:#292a32}
 .onboarding-skip{color:var(--muted);text-decoration:none;font-size:14px;font-weight:600;padding:10px 16px;border-radius:12px;background:transparent}
 .onboarding-skip:hover{background:rgba(23,23,23,.04);color:var(--text)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+@media (min-width: 1024px) {
+  html {
+    font-size: 80%;
+  }
+  body {
+    zoom: 0.8;
+  }
+}
+
 @media(max-width:680px){
   #onboarding{padding:16px;align-items:center;justify-content:center}
   .onboarding-card{border-radius:22px;max-height:95dvh}
