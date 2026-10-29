@@ -41,16 +41,187 @@ let state = loadState();
 if (state.settings.onboarded && !state.onboarding.completed) {
   state.onboarding.completed = true;
 }
-let currentPage = "home";
+
+const PAGE_ALIASES = {
+  home: "home",
+  freebooks: "freebooks",
+  "free-books": "freebooks",
+  "free_books": "freebooks",
+  freebook: "freebooks",
+  discover: "discover",
+  reader: "reader",
+  library: "library",
+  journal: "journal",
+  todo: "todo",
+  todos: "todo",
+  "to-do": "todo",
+  goals: "goals",
+  categories: "categories",
+  stats: "stats",
+  statistics: "stats",
+  settings: "settings",
+  docs: "docs",
+  documentation: "docs"
+};
+
+const PAGE_TITLES = {
+  home: "Daymark JOURNAL",
+  freebooks: "Free Books — Daymark JOURNAL",
+  discover: "Discover — Daymark JOURNAL",
+  reader: "Reader — Daymark JOURNAL",
+  library: "My Library — Daymark JOURNAL",
+  journal: "My Journal — Daymark JOURNAL",
+  todo: "To-Do — Daymark JOURNAL",
+  goals: "Goals — Daymark JOURNAL",
+  categories: "Categories — Daymark JOURNAL",
+  stats: "Progress & Statistics — Daymark JOURNAL",
+  settings: "Settings — Daymark JOURNAL",
+  docs: "Documentation — Daymark JOURNAL"
+};
+
+function resolvePage(raw){
+  if(!raw) return null;
+  const clean = String(raw).trim().toLowerCase().replace(/^#+[/]?/, "").replace(/^\/+|\/+$/g, "").replace(/\.html$/, "");
+  return PAGE_ALIASES[clean] || null;
+}
+
+function getInitialPage(){
+  const fromHash = resolvePage(location.hash);
+  if(fromHash) return fromHash;
+
+  try {
+    const params = new URLSearchParams(location.search);
+    const fromQuery = resolvePage(params.get("page"));
+    if(fromQuery) return fromQuery;
+  } catch {}
+
+  try {
+    const segments = location.pathname.split("/").filter(Boolean);
+    if(segments.length){
+      const last = segments[segments.length - 1];
+      const fromPath = resolvePage(last);
+      if(fromPath) return fromPath;
+    }
+  } catch {}
+
+  return "home";
+}
+
+function updateDocumentTitle(page){
+  document.title = PAGE_TITLES[page] || "Daymark JOURNAL";
+}
+
+let currentPage = getInitialPage();
 let onboardingStep = 1;
 let taskFilter = "all";
 let bookSearch = "";
 let bookStatus = "all";
 let bookCategory = "all";
 let deferredInstallPrompt = null;
+let discoverCategory="Technology";
+let discoverBooks=[];
+let discoverLoading=false;
+let discoverError="";
 let toastTimer;
 let goalClock = null;
 let pageLoaderTimer = null;
+let discoverRequest = 0;
+let discoverDetailToken = 0;
+let freeBooks=[];
+let freeBooksLoading=false;
+let freeBooksLoadingMore=false;
+let freeBooksError="";
+let freeBooksQuery="";
+let freeBooksTopic="all";
+let freeBooksNext="";
+let freeBooksCount=0;
+let freeBooksKey="";
+let freeBooksRequest=0;
+let freeBooksAbort=null;
+let freeBooksSearchTimer=null;
+let freeBooksCache={};
+let readerBook=null;
+let readerFontScale=1;
+let readerDark=false;
+try{const prefs=JSON.parse(localStorage.getItem("daymark-reader-prefs")||"{}");if(prefs){readerFontScale=Math.min(1.6,Math.max(.8,Number(prefs.fontScale)||1));readerDark=Boolean(prefs.dark);}}catch{}
+const DISCOVER_CACHE_KEY = "daymark-discover-cache-v1";
+const DISCOVER_TIMEOUT = 1800;
+const FREE_BOOKS_API = "https://gutendex.com/books/";
+const FREE_BOOKS_TIMEOUT = 4000;
+const FREE_BOOKS_TOPICS = [{label:"All",value:"all"},{label:"Fiction",value:"fiction"},{label:"Poetry",value:"poetry"},{label:"Science",value:"science"},{label:"History",value:"history"},{label:"Philosophy",value:"philosophy"},{label:"Adventure",value:"adventure"},{label:"Mystery",value:"mystery"},{label:"Romance",value:"romance"},{label:"Drama",value:"drama"},{label:"Children",value:"children"},{label:"Fantasy",value:"fantasy"},{label:"Horror",value:"horror"}];
+const FREE_BOOKS_FALLBACK = [
+  {id:1342,title:"Pride and Prejudice",author:"Jane Austen",subjects:["England -- Fiction","Love stories"],topics:["fiction","romance"]},
+  {id:11,title:"Alice's Adventures in Wonderland",author:"Lewis Carroll",subjects:["Fantasy fiction","Children's stories"],topics:["children","fantasy","fiction"]},
+  {id:1661,title:"The Adventures of Sherlock Holmes",author:"Arthur Conan Doyle",subjects:["Detective and mystery stories","Private investigators -- England"],topics:["mystery","fiction"]},
+  {id:2701,title:"Moby Dick; Or, The Whale",author:"Herman Melville",subjects:["Sea stories","Whaling -- Fiction"],topics:["adventure","fiction"]},
+  {id:84,title:"Frankenstein; or, The Modern Prometheus",author:"Mary Shelley",subjects:["Horror tales","Science fiction"],topics:["horror","science","fiction"]},
+  {id:345,title:"Dracula",author:"Bram Stoker",subjects:["Horror tales","Vampires -- Fiction"],topics:["horror","fiction"]},
+  {id:98,title:"A Tale of Two Cities",author:"Charles Dickens",subjects:["Historical fiction","France -- History -- Revolution"],topics:["history","fiction"]},
+  {id:1400,title:"Great Expectations",author:"Charles Dickens",subjects:["Orphans -- Fiction","Bildungsromans"],topics:["fiction"]},
+  {id:2600,title:"War and Peace",author:"Leo Tolstoy",subjects:["Historical fiction","Napoleonic Wars -- Fiction"],topics:["history","fiction"]},
+  {id:1399,title:"Anna Karenina",author:"Leo Tolstoy",subjects:["Love stories","Married women -- Fiction"],topics:["romance","fiction"]},
+  {id:1232,title:"The Prince",author:"Niccolo Machiavelli",subjects:["Political science -- Philosophy","State, The"],topics:["philosophy","history"]},
+  {id:1497,title:"The Republic",author:"Plato",subjects:["Political science -- Early works","Utopias"],topics:["philosophy"]},
+  {id:2680,title:"Meditations",author:"Marcus Aurelius",subjects:["Stoics","Ethics"],topics:["philosophy"]},
+  {id:5827,title:"The Problems of Philosophy",author:"Bertrand Russell",subjects:["Knowledge, Theory of","Metaphysics"],topics:["philosophy"]},
+  {id:3207,title:"Leviathan",author:"Thomas Hobbes",subjects:["Political science -- Early works","State, The"],topics:["philosophy"]},
+  {id:36,title:"The War of the Worlds",author:"H. G. Wells",subjects:["Science fiction","Martians -- Fiction"],topics:["science","adventure","fiction"]},
+  {id:35,title:"The Time Machine",author:"H. G. Wells",subjects:["Science fiction","Time travel -- Fiction"],topics:["science","adventure","fiction"]},
+  {id:43,title:"The Strange Case of Dr. Jekyll and Mr. Hyde",author:"Robert Louis Stevenson",subjects:["Horror tales","Physicians -- Fiction"],topics:["horror","fiction"]},
+  {id:1952,title:"The Yellow Wallpaper",author:"Charlotte Perkins Gilman",subjects:["Psychological fiction","Feminist fiction"],topics:["horror","fiction"]},
+  {id:174,title:"The Picture of Dorian Gray",author:"Oscar Wilde",subjects:["Supernatural -- Fiction","Conduct of life -- Fiction"],topics:["horror","fiction"]},
+  {id:1260,title:"Jane Eyre",author:"Charlotte Bronte",subjects:["Orphans -- Fiction","Love stories"],topics:["romance","fiction"]},
+  {id:103,title:"Around the World in Eighty Days",author:"Jules Verne",subjects:["Voyages around the world","Adventure stories"],topics:["adventure","fiction"]},
+  {id:16,title:"Peter Pan",author:"J. M. Barrie",subjects:["Fantasy literature","Pirates -- Fiction"],topics:["children","fantasy"]},
+  {id:120,title:"Treasure Island",author:"Robert Louis Stevenson",subjects:["Sea stories","Pirates -- Fiction"],topics:["adventure","children"]},
+  {id:76,title:"Adventures of Huckleberry Finn",author:"Mark Twain",subjects:["Adventure stories","Boys -- Fiction"],topics:["adventure","fiction"]},
+  {id:2591,title:"Grimms' Fairy Tales",author:"Jacob Grimm",subjects:["Fairy tales -- Germany","Children's stories"],topics:["children","fantasy"]},
+  {id:45,title:"Anne of Green Gables",author:"L. M. Montgomery",subjects:["Orphans -- Fiction","Friendship -- Fiction"],topics:["children","romance"]},
+  {id:100,title:"The Complete Works of William Shakespeare",author:"William Shakespeare",subjects:["English drama","Plays"],topics:["drama","poetry"]},
+  {id:2542,title:"A Doll's House",author:"Henrik Ibsen",subjects:["Marriage -- Drama","Norwegian drama"],topics:["drama"]},
+  {id:132,title:"The Art of War",author:"Sun Tzu",subjects:["Military art and science","War -- Early works"],topics:["philosophy","history"]},
+  {id:5001,title:"Relativity: The Special and General Theory",author:"Albert Einstein",subjects:["Relativity (Physics)","Physics"],topics:["science"],txt:false},
+  {id:7142,title:"The History of the Peloponnesian War",author:"Thucydides",subjects:["Greece -- History","Peloponnesian War"],topics:["history"]},
+  {id:8800,title:"The Divine Comedy",author:"Dante Alighieri",subjects:["Epic poetry, Italian","Italian poetry"],topics:["poetry"]},
+  {id:844,title:"The Importance of Being Earnest",author:"Oscar Wilde",subjects:["Comedy plays","England -- Drama"],topics:["drama"]},
+  {id:55,title:"The Wonderful Wizard of Oz",author:"L. Frank Baum",subjects:["Fantasy literature","Children's stories"],topics:["children","fantasy"]}
+];
+const discoverFallbacks = {
+  Technology:[["The Design of Everyday Things","Don Norman",2013,"9780465050659"],["The Innovators","Walter Isaacson",2014,"9781476708690"],["Clean Architecture","Robert C. Martin",2017,"9780134494166"],["The Phoenix Project","Gene Kim",2013,"9780988262591"]],
+  Programming:[["The Pragmatic Programmer","Andrew Hunt",1999,"9780201616224"],["Clean Code","Robert C. Martin",2008,"9780132350884"],["Code Complete","Steve McConnell",2004,"9780735619678"],["Refactoring","Martin Fowler",2018,"9780134757599"]],
+  Business:[["Zero to One","Peter Thiel",2014,"9780804139298"],["The Lean Startup","Eric Ries",2011,"9780307887894"],["Good to Great","Jim Collins",2001,"9780066620992"],["Start with Why","Simon Sinek",2009,"9781591846444"]],
+  "Personal Development":[["Atomic Habits","James Clear",2018,"9780735211292"],["Deep Work","Cal Newport",2016,"9781455586691"],["The 7 Habits of Highly Effective People","Stephen R. Covey",1989,"9781982137274"],["Mindset","Carol S. Dweck",2006,"9780345472328"]],
+  Psychology:[["Thinking, Fast and Slow","Daniel Kahneman",2011,"9780374533557"],["Influence","Robert B. Cialdini",1984,"9780061241895"],["The Power of Habit","Charles Duhigg",2012,"9780812981605"],["Man's Search for Meaning","Viktor E. Frankl",1946,"9780807014295"]],
+  Fiction:[["The Midnight Library","Matt Haig",2020,"9780525559474"],["The Alchemist","Paulo Coelho",1988,"9780062315007"],["The Kite Runner","Khaled Hosseini",2003,"9781594631931"],["Life of Pi","Yann Martel",2001,"9780156027328"]],
+  Mystery:[["The Girl with the Dragon Tattoo","Stieg Larsson",2005,"9780307454546"],["Gone Girl","Gillian Flynn",2012,"9780307588371"],["The Da Vinci Code","Dan Brown",2003,"9780307474278"],["And Then There Were None","Agatha Christie",1939,"9780062073488"]],
+  Romance:[["Pride and Prejudice","Jane Austen",1813,"9780141439518"],["Jane Eyre","Charlotte Brontë",1847,"9780142437209"],["The Notebook","Nicholas Sparks",1996,"9780446605236"],["Me Before You","Jojo Moyes",2012,"9780143124542"]],
+  Fantasy:[["The Hobbit","J.R.R. Tolkien",1937,"9780547928227"],["Harry Potter and the Sorcerer's Stone","J.K. Rowling",1997,"9780590353427"],["The Name of the Wind","Patrick Rothfuss",2007,"9780756404741"],["A Game of Thrones","George R.R. Martin",1996,"9780553103540"]],
+  Science:[["Sapiens","Yuval Noah Harari",2011,"9780062316097"],["A Brief History of Time","Stephen Hawking",1988,"9780553380163"],["Cosmos","Carl Sagan",1980,"9780345539434"],["The Selfish Gene","Richard Dawkins",1976,"9780198788607"]],
+  History:[["Guns, Germs, and Steel","Jared Diamond",1997,"9780393317558"],["1491","Charles C. Mann",2005,"9781400032051"],["SPQR","Mary Beard",2015,"9781631492228"],["The Silk Roads","Peter Frankopan",2015,"9781101912379"]],
+  Biography:[["Steve Jobs","Walter Isaacson",2011,"9781451648539"],["The Diary of a Young Girl","Anne Frank",1947,"9780553296983"],["Educated","Tara Westover",2018,"9780399590504"],["Elon Musk","Walter Isaacson",2023,"9781982181284"]]
+};
+function fallbackBooks(category){
+  return (discoverFallbacks[category]||discoverFallbacks.Technology).map(([title,author,year,isbn])=>({title,author,year,isbn,cover:`https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`,url:`https://openlibrary.org/search?q=${encodeURIComponent(title)}`,fallback:true}));
+}
+function readDiscoverCache(){
+  try{const cache=JSON.parse(localStorage.getItem(DISCOVER_CACHE_KEY)||"{}");return cache&&typeof cache==="object"?cache:{};}catch{return{};}
+}
+function writeDiscoverCache(category,books){
+  try{const cache=readDiscoverCache();cache[category]={books,ts:Date.now()};localStorage.setItem(DISCOVER_CACHE_KEY,JSON.stringify(cache));}catch{}
+}
+function mapDiscoverDoc(doc){
+  return {title:doc.title||"Untitled",author:(doc.author_name||[]).join(", ")||"Unknown author",year:doc.first_publish_year||"",pages:doc.number_of_pages_median||"",key:doc.key||"",cover:doc.cover_i?`https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`:"",url:`https://openlibrary.org${doc.key}`};
+}
+async function requestDiscoverBooks(category){
+  const res=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(category)}&limit=12&fields=title,author_name,first_publish_year,cover_i,key,number_of_pages_median`);
+  if(!res.ok)throw new Error("Request failed");
+  const data=await res.json();
+  return (data.docs||[]).map(mapDiscoverDoc);
+}
+async function prefetchDiscover(category){
+  if(readDiscoverCache()[category])return;
+  try{const books=await requestDiscoverBooks(category);if(books.length)writeDiscoverCache(category,books);}catch{}
+}
 
 function todayISO(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function uid(){ return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
@@ -69,19 +240,34 @@ function isInstalled(){return window.matchMedia("(display-mode: standalone)").ma
 function updateMode(){document.body.classList.toggle("installed",isInstalled());$("#installBtn").hidden=isInstalled();}
 function showPageLoader(){const loader=$("#pageLoader");if(loader){loader.hidden=false;document.body.classList.add("is-loading");}}
 function hidePageLoader(){const loader=$("#pageLoader");if(loader){loader.hidden=true;document.body.classList.remove("is-loading");}}
-function setPage(page){
-  if(page===currentPage&&!pageLoaderTimer)return;
-  currentPage=page;
-  $("#mobileMenu").hidden=true;$("#menuToggle").setAttribute("aria-expanded","false");
-  $$(".nav-link,.bottom-link").forEach(b=>b.classList.toggle("active",b.dataset.page===page));
+function setPage(page, updateHistory = true){
+  const targetPage = resolvePage(page) || "home";
+  if(targetPage === currentPage && !pageLoaderTimer) return;
+  currentPage = targetPage;
+  $("#mobileMenu").hidden = true;
+  $("#menuToggle").setAttribute("aria-expanded", "false");
+  $$(".nav-link,.bottom-link,#mobileMenu button").forEach(b => b.classList.toggle("active", b.dataset.page === targetPage));
+
+  if(updateHistory){
+    try {
+      const targetHash = targetPage === "home" ? "" : `#${targetPage}`;
+      if(location.hash !== targetHash){
+        history.pushState({ page: targetPage }, "", targetHash || (location.pathname.endsWith("/index.html") ? "./" : "./"));
+      }
+    } catch {}
+  }
+  updateDocumentTitle(targetPage);
   showPageLoader();
   clearTimeout(pageLoaderTimer);
-  pageLoaderTimer=setTimeout(()=>{
-    pageLoaderTimer=null;
-    try{renderPage();}finally{hidePageLoader();}
-    $("#mainContent").focus({preventScroll:true});
-    window.scrollTo({top:0,behavior:"smooth"});
-  },1200);
+  const quickPage = targetPage === "discover" || targetPage === "freebooks" || targetPage === "reader";
+  if(targetPage === "discover" && !discoverBooks.length && !discoverLoading && !discoverError) fetchDiscover(discoverCategory);
+  if(targetPage === "freebooks" && !freeBooks.length && !freeBooksLoading && !freeBooksError) loadFreeBooks(true);
+  pageLoaderTimer = setTimeout(() => {
+    pageLoaderTimer = null;
+    try { renderPage(); } finally { hidePageLoader(); }
+    $("#mainContent").focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, quickPage ? 0 : 1200);
 }
 function coverFor(book){return book.image||(categoryCovers[book.category]||{}).image||"";}
 function shelfBooks(category){
@@ -93,13 +279,40 @@ function shelfBooks(category){
 function bookCover(book){const image=coverFor(book);return `<div class="book-cover ${escapeHTML(book.cover||"cover-cream")}">${image?`<img class="cover-img" src="${escapeHTML(image)}" alt="Cover of ${escapeHTML(book.title)}" loading="lazy" onerror="this.style.display='none'">`:""}<strong>${escapeHTML(book.title)}</strong><small>${escapeHTML(book.author)}</small></div>`;}
 function emptyState(title,description,action,label){return `<div class="empty-state"><strong>${escapeHTML(title)}</strong><div>${escapeHTML(description)}</div>${action?`<button class="button button-primary" style="margin-top:16px" data-action="${action}">${escapeHTML(label||"Add new")}</button>`:""}</div>`;}
 function renderPage(){
-  const pages={home:renderHome,library:renderLibrary,journal:renderJournal,todo:renderTodo,goals:renderGoals,categories:renderCategories,stats:renderStats,settings:renderSettings,docs:renderDocs};
-  $("#mainContent").innerHTML=(pages[currentPage]||renderHome)();
+  const pages = {
+    home: renderHome,
+    discover: renderDiscover,
+    freebooks: renderFreeBooks,
+    "free-books": renderFreeBooks,
+    freeBooks: renderFreeBooks,
+    reader: renderReader,
+    library: renderLibrary,
+    journal: renderJournal,
+    todo: renderTodo,
+    goals: renderGoals,
+    categories: renderCategories,
+    stats: renderStats,
+    settings: renderSettings,
+    docs: renderDocs
+  };
+  const activePage = resolvePage(currentPage) || "home";
+  currentPage = activePage;
+  $("#mainContent").innerHTML = (pages[activePage] || renderHome)();
+  $$(".nav-link,.bottom-link,#mobileMenu button").forEach(b => b.classList.toggle("active", b.dataset.page === activePage));
+  updateDocumentTitle(activePage);
   bindPageEvents();
-  if(currentPage==="goals")startGoalClock();
-  else if(goalClock){clearInterval(goalClock);goalClock=null;}
+  if(activePage === "discover" && !discoverBooks.length && !discoverLoading && !discoverError) fetchDiscover(discoverCategory);
+  if(activePage === "freebooks" && !freeBooks.length && !freeBooksLoading && !freeBooksError) loadFreeBooks(true);
+  if(activePage === "reader") applyReaderSettings();
+  if(activePage === "goals") startGoalClock();
+  else if(goalClock){ clearInterval(goalClock); goalClock = null; }
 }
-function renderHome(){
+function renderDiscover(){
+  const cats=["Technology","Programming","Business","Personal Development","Psychology","Fiction","Mystery","Romance","Fantasy","Science","History","Biography"];
+  const chips=cats.map(c=>`<button class="filter-btn ${discoverCategory===c?"active":""}" data-discover-cat="${c}">${c}</button>`).join("");
+  const cards=discoverLoading?`<div class="empty-state"><strong>Loading recommendations…</strong></div>`:discoverError?`<div class="empty-state"><strong>${escapeHTML(discoverError)}</strong><button class="button button-secondary" data-action="discover-retry" style="margin-top:10px">Retry</button></div>`:discoverBooks.length?discoverBooks.map((b,i)=>`<article class="book-card" data-discover-idx="${i}" tabindex="0" role="button" aria-label="View details for ${escapeHTML(b.title)}"><div class="book-cover">${b.cover?`<img src="${escapeHTML(b.cover)}" alt="" loading="lazy" onerror="this.style.display='none'">`:""}</div><div class="book-info"><strong>${escapeHTML(b.title)}</strong><small>${escapeHTML(b.author)}${b.year?` · ${b.year}`:""}</small><div style="display:flex;gap:8px;margin-top:8px"><button class="small-btn add-library-btn" data-action="discover-add" data-idx="${i}" style="background:#111;color:#fff;border-color:#111">Add to Library</button></div></div></article>`).join(""):`<div class="empty-state"><strong>No results.</strong>Try another category.</div>`;
+  return `<section class="page-heading"><div><p class="eyebrow">DISCOVER</p><h1>What should I read?</h1><p class="subtitle">Real recommendations from Open Library.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button-primary" data-page="freebooks">Free Books</button><button class="button button-secondary" data-action="discover-surprise">Surprise Me</button><button class="button button-secondary" data-action="discover-refresh">Refresh</button></div></section><div class="task-filters" style="flex-wrap:wrap">${chips}</div><div class="book-grid">${cards}</div>`;
+}function renderHome(){
   const todayTasks=state.tasks.filter(t=>t.due===todayISO()),done=todayTasks.filter(t=>t.done).length;
   const reading=state.books.filter(b=>b.status==="reading"),completed=state.books.filter(b=>b.status==="completed");
   const pagesRead=state.books.reduce((sum,b)=>sum+(Number(b.currentPage)||0),0);
@@ -111,7 +324,7 @@ function renderHome(){
     <article class="stat-card"><div class="stat-top"><span>Pages read</span><span class="stat-mark">↗</span></div><div class="stat-number">${pagesRead}</div><small class="subtitle">Across your library</small></article>
     <article class="stat-card"><div class="stat-top"><span>Journal entries</span><span class="stat-mark">✎</span></div><div class="stat-number">${state.entries.length}</div><small class="subtitle">Thoughts captured</small></article>
   </div>
-  <section class="section"><div class="section-heading"><h2>My shelves</h2><button class="text-button" data-page="library">View library →</button></div>
+  <section class="section"><div class="section-heading"><h2>My shelves</h2><div style="display:flex;gap:12px"><button class="text-button" data-page="freebooks">Free books →</button><button class="text-button" data-page="library">View library →</button></div></div>
   <div class="shelf-list">${state.shelves.slice(0,4).map(s=>{const owned=state.books.filter(b=>s.category==="Favorites"?b.favorite:b.category===s.category),thumbs=shelfBooks(s.category);return `<article class="shelf-card" data-shelf="${escapeHTML(s.category)}"><div class="shelf-art ${thumbs.length===1?"single":""}" style="background:${s.category==="Technology"?"#d8eafa":s.category==="Productivity"?"#ffe7d6":s.category==="Favorites"?"#eee4ff":"#f8eebf"}">${thumbs.map(b=>`<div class="mini-cover">${b.image?`<img src="${escapeHTML(b.image)}" alt="Cover of ${escapeHTML(b.title)}" loading="lazy" onerror="this.style.display='none'">`:""}<span>${escapeHTML(b.title)}</span></div>`).join("")||`<div class="mini-cover"><span>YOUR BOOKS</span></div>`}</div><div class="shelf-meta"><div><h3>${escapeHTML(s.name)}</h3><p>${owned.length} ${owned.length===1?"book":"books"}</p></div><span>↗</span></div></article>`}).join("")}</div></section>
   <section class="section dashboard-grid"><article class="panel"><div class="section-heading"><h2>Today's focus</h2><button class="text-button" data-page="todo">All tasks →</button></div>
   ${nextTask?`<div class="focus-item"><div class="focus-icon">☑</div><div style="flex:1"><strong>${escapeHTML(nextTask.title)}</strong><p>${escapeHTML(nextTask.description||"One small step is still progress.")}</p><div class="card-meta" style="margin-top:9px"><span>${dateLabel(nextTask.due)}</span><span class="priority priority-${nextTask.priority}">${escapeHTML(nextTask.priority)} priority</span></div></div></div>`:`<div class="empty-state"><strong>You're all caught up.</strong>Enjoy the space you've made.</div>`}
@@ -121,7 +334,7 @@ function renderHome(){
 function renderLibrary(){
   const list=state.books.filter(b=>(`${b.title} ${b.author}`.toLowerCase().includes(bookSearch.toLowerCase()))&&(bookStatus==="all"||b.status===bookStatus)&&(bookCategory==="all"||(bookCategory==="Favorites"?b.favorite:b.category===bookCategory)));
   return `<section class="page-heading"><div><p class="eyebrow">YOUR COLLECTION</p><h1>My library</h1><p class="subtitle">Keep your current reads, future favorites, and finished books together.</p></div><button class="button button-primary" data-action="new-book">＋ Add book</button></section>
-  <div class="toolbar"><input class="field search-field" id="bookSearch" placeholder="Search books or authors..." value="${escapeHTML(bookSearch)}" aria-label="Search books"><select class="field" id="bookStatus" aria-label="Filter by reading status"><option value="all">All statuses</option><option value="reading">Reading</option><option value="planned">Want to read</option><option value="completed">Completed</option></select><button class="button button-secondary" data-action="new-shelf">＋ Shelf</button>${bookCategory!=="all"?`<button class="filter-btn active" data-action="clear-category">${escapeHTML(bookCategory)} ×</button>`:""}</div>
+  <div class="toolbar"><input class="field search-field" id="bookSearch" placeholder="Search books or authors..." value="${escapeHTML(bookSearch)}" aria-label="Search books"><select class="field" id="bookStatus" aria-label="Filter by reading status"><option value="all">All statuses</option><option value="reading">Reading</option><option value="planned">Want to read</option><option value="completed">Completed</option></select><button class="button button-secondary" data-action="new-shelf">＋ Shelf</button><button class="button button-secondary" data-page="freebooks">Free Books</button>${bookCategory!=="all"?`<button class="filter-btn active" data-action="clear-category">${escapeHTML(bookCategory)} ×</button>`:""}</div>
   ${list.length?`<div class="book-grid">${list.map(b=>`<article class="book-card" data-book="${b.id}" tabindex="0" role="button" aria-label="Open ${escapeHTML(b.title)}">${bookCover(b)}<div class="book-info"><strong>${escapeHTML(b.title)}</strong><small>${escapeHTML(b.author)} · ${escapeHTML(b.status==="reading"?"Reading":b.status==="completed"?"Completed":"Want to read")}</small>${b.status==="reading"?`<div class="book-progress"><span style="width:${Math.min(100,Math.round((b.currentPage/Math.max(1,b.pages))*100))}%"></span></div>`:""}</div></article>`).join("")}</div>`:emptyState("No books found","Add a book or change your search filters.","new-book","Add your first book")}`;
 }
 function renderJournal(){
@@ -247,7 +460,10 @@ function renderDocs(){
   <section class="section"><div class="section-heading"><h2>6. Keep your data safe</h2></div>
     <p>In Settings you can export your journal as a JSON backup, import a backup, update your name, or switch themes. Your data is saved locally in your browser.</p>
   </section>
-  <section class="section"><div class="section-heading"><h2>7. Install the app</h2></div>
+  <section class="section"><div class="section-heading"><h2>7. Read free classics</h2></div>
+    <p>Open Free Books to browse public-domain titles from Project Gutenberg. Search by title or author, filter by category, download EPUB, PDF, or plain text, or tap <strong>Read Now</strong> to read a book in the app.</p>
+  </section>
+  <section class="section"><div class="section-heading"><h2>8. Install the app</h2></div>
     <p>Tap <strong>Get the app</strong> in the top bar (or use your browser's "Add to Home screen") to install Daymark JOURNAL. Once installed, the bottom navigation appears and the app works offline.</p>
   </section>`;
 }
@@ -318,14 +534,78 @@ function completeOnboarding(){
   renderPage();
   showToast("Welcome to Daymark, "+escapeHTML(state.profile.name)+"!");
 }
-function bindPageEvents(){
+async function fetchDiscover(cat,force=false){
+  const target=cat||discoverCategory;
+  const changed=target!==discoverCategory;
+  discoverCategory=target;
+  if(discoverLoading&&!changed)return;
+  if(changed){discoverBooks=[];discoverError="";}
+  const requestId=++discoverRequest;
+  const cached=force?null:readDiscoverCache()[discoverCategory];
+  if(cached&&cached.books&&cached.books.length){
+    discoverBooks=cached.books;discoverError="";discoverLoading=false;
+    renderPage();
+    if(Date.now()-(cached.ts||0)<86400000)return;
+  }
+  discoverLoading=true;discoverError="";
+  if(!discoverBooks.length)renderPage();
+  let settled=false;
+  const fallbackTimer=setTimeout(()=>{
+    if(settled||requestId!==discoverRequest)return;
+    settled=true;
+    if(!discoverBooks.length){
+      discoverBooks=fallbackBooks(discoverCategory);
+      discoverLoading=false;
+      renderPage();
+    }
+  },DISCOVER_TIMEOUT);
+  try{
+    const books=await requestDiscoverBooks(discoverCategory);
+    clearTimeout(fallbackTimer);
+    if(requestId!==discoverRequest)return;
+    settled=true;
+    discoverBooks=books;
+    discoverError=books.length?"":"No results found.";
+    discoverLoading=false;
+    if(books.length)writeDiscoverCache(discoverCategory,books);
+    if(currentPage==="discover")renderPage();
+  }catch(e){
+    clearTimeout(fallbackTimer);
+    if(requestId!==discoverRequest||settled)return;
+    settled=true;
+    discoverBooks=fallbackBooks(discoverCategory);
+    discoverLoading=false;
+    if(!discoverBooks.length)discoverError="Could not load recommendations.";
+    if(currentPage==="discover")renderPage();
+  }
+}function bindPageEvents(){
   $("#bookSearch")?.addEventListener("input",e=>{bookSearch=e.target.value;const pos=e.target.selectionStart;renderPage();const field=$("#bookSearch");field.focus();field.setSelectionRange(pos,pos);});
   $("#bookStatus")?.addEventListener("change",e=>{bookStatus=e.target.value;renderPage();$("#bookStatus").value=bookStatus;});
   $("#journalSearch")?.addEventListener("input",e=>{const q=e.target.value.toLowerCase();$$("[data-entry-card]").forEach(card=>card.hidden=!card.textContent.toLowerCase().includes(q));});
   $$("[data-book]").forEach(card=>{const open=()=>openBook(card.dataset.book);card.addEventListener("click",open);card.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});});
   $$("[data-shelf]").forEach(card=>card.addEventListener("click",()=>{bookSearch="";bookStatus="all";bookCategory=card.dataset.shelf;setPage("library");showToast(`Opened ${card.dataset.shelf} shelf`);}));
   $$("[data-category]").forEach(card=>card.addEventListener("click",()=>{bookSearch="";bookStatus="all";bookCategory=card.dataset.category;setPage("library");}));
+  $$("[data-discover-cat]").forEach(btn=>btn.addEventListener("click",()=>fetchDiscover(btn.dataset.discoverCat)));
+  const freeSearch=$("#freeBooksSearch");
+  if(freeSearch){
+    freeSearch.addEventListener("input",e=>{
+      freeBooksQuery=e.target.value;
+      const pos=e.target.selectionStart;
+      clearTimeout(freeBooksSearchTimer);
+      freeBooksSearchTimer=setTimeout(()=>{
+        loadFreeBooks(true);
+        setTimeout(()=>{const field=$("#freeBooksSearch");if(field){field.focus();if(typeof pos==="number")field.setSelectionRange(pos,pos);}},0);
+      },450);
+    });
+    freeSearch.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();clearTimeout(freeBooksSearchTimer);loadFreeBooks(true);}});
+  }
+  $$("[data-freebooks-topic]").forEach(btn=>btn.addEventListener("click",()=>{const topic=btn.dataset.freebooksTopic;if(topic===freeBooksTopic)return;clearTimeout(freeBooksSearchTimer);freeBooksTopic=topic;loadFreeBooks(true);}));
+  document.querySelectorAll("[data-action=discover-add]").forEach(btn=>btn.addEventListener("click",()=>{const b=discoverBooks[Number(btn.dataset.idx)];if(!b)return;state.books.push({id:uid(),title:b.title,author:b.author,category:discoverCategory,pages:Number(b.pages)||200,currentPage:0,status:"planned",favorite:false,cover:"cover-blue",image:b.cover,notes:""});persist();renderPage();showToast("Added to library");}));
+  $$("[data-discover-idx]").forEach(card=>{const open=()=>openDiscoverBook(Number(card.dataset.discoverIdx));card.addEventListener("click",e=>{if(e.target.closest("[data-action=discover-add]"))return;open();});card.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});});
   $$("[data-task-filter]").forEach(btn=>btn.addEventListener("click",()=>{taskFilter=btn.dataset.taskFilter;renderPage();}));
+  document.querySelector("[data-action=discover-surprise]")?.addEventListener("click",()=>{const cats=["Technology","Programming","Business","Personal Development","Psychology","Fiction","Mystery","Romance","Fantasy","Science","History","Biography"];fetchDiscover(cats[Math.floor(Math.random()*cats.length)],true);});
+  document.querySelector("[data-action=discover-refresh]")?.addEventListener("click",()=>fetchDiscover(discoverCategory,true));
+  document.querySelector("[data-action=discover-retry]")?.addEventListener("click",()=>fetchDiscover(discoverCategory,true));
   $$("[data-toggle-task]").forEach(input=>input.addEventListener("change",async()=>{const task=state.tasks.find(t=>t.id===input.dataset.toggleTask);if(!task)return;input.disabled=true;try{await simulateRequest(()=>{task.done=input.checked;task.updated=Date.now();persist();},300);renderPage();showToast(task.done?"Task completed":"Task marked incomplete");}catch{showToast("Could not update task.");}}));
 }
 function openModal(title,content){$("#modalTitle").textContent=title;$("#modalBody").innerHTML=content;$("#modalBackdrop").hidden=false;document.body.style.overflow="hidden";const first=$("#modalBody input,#modalBody textarea,#modalBody select");if(first)setTimeout(()=>first.focus(),50);}
@@ -366,6 +646,279 @@ function openBook(id){
   $("#editBook").onclick=()=>{closeModal();bookForm(b);};$("#deleteBook").onclick=()=>{if(confirm(`Delete "${b.title}" from your library?`)){state.books=state.books.filter(x=>x.id!==id);persist();closeModal();renderPage();showToast("Book deleted");}};
   $("#favoriteBook").onclick=()=>{b.favorite=!b.favorite;persist();closeModal();renderPage();showToast(b.favorite?"Added to favorites":"Removed from favorites");};
 }
+function shortText(value,max=600){const text=String(value||"").replace(/\s+/g," ").trim();return text.length>max?`${text.slice(0,max).trim()}…`:text;}
+function discoverDetailsMarkup(b){
+  const pages=b.pages?`${b.pages} pages`:"Pages unknown";
+  return `<div style="display:grid;grid-template-columns:120px 1fr;gap:18px;align-items:start"><div class="book-cover cover-blue" style="width:120px">${b.cover?`<img class="cover-img" src="${escapeHTML(b.cover)}" alt="Cover of ${escapeHTML(b.title)}" onerror="this.style.display='none'">`:""}<strong>${escapeHTML(b.title)}</strong><small>${escapeHTML(b.author)}</small></div><div><h2>${escapeHTML(b.title)}</h2><p class="subtitle">${escapeHTML(b.author)}</p><div class="card-meta" style="margin-top:8px"><span>${escapeHTML(String(b.year||"Year unknown"))}</span><span id="discoverPages">${escapeHTML(pages)}</span></div><div class="section" style="margin-top:14px"><h3 style="margin-bottom:4px">What it's about</h3><p class="subtitle" id="discoverSubjects">Loading topics…</p></div><div class="section" style="margin-top:12px"><h3 style="margin-bottom:4px">Summary</h3><p id="discoverSummary" style="font-size:13px;line-height:1.6">Loading summary…</p></div><div class="form-actions" style="margin-top:16px;flex-wrap:wrap"><button class="button button-secondary" id="discoverReadNow">Read Now</button><button class="button button-primary" id="discoverDetailAdd" style="background:#111;color:#fff;border-color:#111">Add to Library</button></div><p class="subtitle" id="discoverReadStatus" style="margin-top:10px"></p></div></div>`;
+}
+async function resolveDiscoverKey(b){
+  if(b.key)return b.key;
+  if(b.isbn){
+    try{const res=await fetch(`https://openlibrary.org/isbn/${b.isbn}.json`);if(res.ok){const data=await res.json();b.key=(data.works&&data.works[0]&&data.works[0].key)||"";b.pages=b.pages||data.number_of_pages||"";}}catch{}
+  }
+  if(!b.key&&b.title){
+    try{const res=await fetch(`https://openlibrary.org/search.json?title=${encodeURIComponent(b.title)}&limit=1&fields=key,number_of_pages_median`);if(res.ok){const data=await res.json();const doc=(data.docs||[])[0];if(doc){b.key=doc.key||"";b.pages=b.pages||doc.number_of_pages_median||"";}}}catch{}
+  }
+  return b.key||"";
+}
+async function fetchDiscoverDetails(b){
+  const key=await resolveDiscoverKey(b);
+  if(!key)return null;
+  const res=await fetch(`https://openlibrary.org${key}.json`);
+  if(!res.ok)return null;
+  const data=await res.json();
+  const description=typeof data.description==="string"?data.description:(data.description&&data.description.value)||"";
+  return {description,subjects:(data.subjects||[]).slice(0,6)};
+}
+function chooseReadableId(ids){
+  const score=id=>{let s=0;if(/gut$/.test(id))s+=4;if(/librivox/.test(id))s-=5;if(/^bwb_/.test(id)||/^isbn_/.test(id))s-=6;if(/0000/.test(id))s-=3;if(/\.edu$/.test(id))s-=2;return s;};
+  return [...ids].sort((a,b)=>score(b)-score(a))[0]||"";
+}
+async function fetchReadAvailability(b){
+  const key=await resolveDiscoverKey(b);
+  const url=key?`https://openlibrary.org${key}`:"";
+  if(!key)return {url};
+  try{
+    const res=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(`key:${key}`)}&limit=1&fields=ia,ebook_access,public_scan_b`);
+    if(!res.ok)return {url};
+    const doc=((await res.json()).docs||[])[0]||{};
+    const ids=Array.isArray(doc.ia)?doc.ia:[];
+    return {url,access:doc.ebook_access||"",publicId:doc.ebook_access==="public"?chooseReadableId(ids):""};
+  }catch{return {url};}
+}
+function openReader(url,title,externalUrl){
+  let overlay=$("#readerOverlay");
+  if(!overlay){
+    overlay=document.createElement("div");
+    overlay.id="readerOverlay";overlay.className="reader-overlay";
+    overlay.innerHTML=`<div class="reader-bar"><strong id="readerTitle"></strong><div class="reader-actions"><a id="readerExternal" class="button button-secondary" target="_blank" rel="noopener">Open in new tab</a><button class="button button-secondary" id="readerClose">Close</button></div></div><iframe id="readerFrame" allowfullscreen></iframe>`;
+    document.body.appendChild(overlay);
+    $("#readerClose").addEventListener("click",closeReader);
+    overlay.addEventListener("click",e=>{if(e.target===overlay)closeReader();});
+  }
+  $("#readerTitle").textContent=title;
+  $("#readerExternal").href=externalUrl;
+  $("#readerFrame").src=url;
+  overlay.hidden=false;document.body.style.overflow="hidden";
+}
+function closeReader(){
+  const overlay=$("#readerOverlay");if(!overlay)return;
+  overlay.hidden=true;
+  const frame=$("#readerFrame");if(frame)frame.src="about:blank";
+  if($("#modalBackdrop")&&$("#modalBackdrop").hidden)document.body.style.overflow="";
+}
+async function startDiscoverRead(b){
+  const btn=$("#discoverReadNow"),status=$("#discoverReadStatus");
+  if(!btn||btn.disabled)return;
+  const original=btn.textContent;btn.disabled=true;btn.textContent="Loading…";
+  if(status)status.textContent="Checking available editions…";
+  try{
+    const info=await fetchReadAvailability(b);
+    if(info.publicId){
+      if(status)status.textContent="";
+      openReader(`https://archive.org/embed/${encodeURIComponent(info.publicId)}`,b.title,`https://archive.org/details/${encodeURIComponent(info.publicId)}`);
+    }else if(info.url){
+      status.innerHTML=`This book is not available as free full text. Read or borrow it on <a href="${escapeHTML(info.url)}" target="_blank" rel="noopener">Open Library</a>.`;
+    }else{
+      status.textContent="No full-text copy is available for this book.";
+    }
+  }catch{
+    if(status)status.textContent="Could not load the book right now.";
+  }finally{btn.disabled=false;btn.textContent=original;}
+}
+async function openDiscoverBook(index){
+  const b=discoverBooks[index];if(!b)return;
+  const token=++discoverDetailToken;
+  openModal("Book details",discoverDetailsMarkup(b));
+  $("#discoverDetailAdd").onclick=()=>{state.books.push({id:uid(),title:b.title,author:b.author,category:discoverCategory,pages:Number(b.pages)||200,currentPage:0,status:"planned",favorite:false,cover:"cover-blue",image:b.cover,notes:""});persist();closeModal();renderPage();showToast("Added to library");};
+  $("#discoverReadNow").onclick=()=>startDiscoverRead(b);
+  try{
+    const details=await fetchDiscoverDetails(b);
+    if(token!==discoverDetailToken||$("#modalBackdrop").hidden)return;
+    if(b.pages&&$("#discoverPages"))$("#discoverPages").textContent=`${b.pages} pages`;
+    $("#discoverSubjects").textContent=details&&details.subjects.length?details.subjects.join(" · "):"No topics listed.";
+    $("#discoverSummary").textContent=details&&details.description?shortText(details.description):"No summary available for this book.";
+  }catch{
+    if(token!==discoverDetailToken||$("#modalBackdrop").hidden)return;
+    $("#discoverSubjects").textContent="No topics listed.";
+    $("#discoverSummary").textContent="No summary available for this book.";
+  }
+}
+function fallbackFreeBooks(){
+  const query=freeBooksQuery.trim().toLowerCase();
+  return FREE_BOOKS_FALLBACK.filter(entry=>{
+    if(freeBooksTopic!=="all"&&!entry.topics.includes(freeBooksTopic))return false;
+    return !query||`${entry.title} ${entry.author}`.toLowerCase().includes(query);
+  }).map(entry=>{
+    const formats={
+      "text/html":`https://www.gutenberg.org/cache/epub/${entry.id}/pg${entry.id}-images.html`,
+      "application/epub+zip":`https://www.gutenberg.org/cache/epub/${entry.id}/pg${entry.id}.epub`,
+      "image/jpeg":`https://www.gutenberg.org/cache/epub/${entry.id}/pg${entry.id}.cover.medium.jpg`
+    };
+    if(entry.txt!==false)formats["text/plain; charset=utf-8"]=`https://www.gutenberg.org/cache/epub/${entry.id}/pg${entry.id}.txt`;
+    return {id:entry.id,title:entry.title,authors:[{name:entry.author}],subjects:entry.subjects,formats,fallback:true};
+  });
+}
+function freeBooksUrl(){
+  const params=new URLSearchParams();
+  const query=freeBooksQuery.trim();
+  if(query)params.set("search",query);
+  if(freeBooksTopic!=="all")params.set("topic",freeBooksTopic);
+  const qs=params.toString();
+  return `${FREE_BOOKS_API}${qs?`?${qs}`:""}`;
+}
+function freeBookFormats(book){
+  const formats=book&&book.formats&&typeof book.formats==="object"?book.formats:{};
+  const entries=Object.entries(formats).filter(([,url])=>typeof url==="string"&&url);
+  const pick=test=>entries.find(([mime])=>test(mime.toLowerCase()))?.[1]||"";
+  const htmlEntries=entries.filter(([mime])=>mime.toLowerCase().startsWith("text/html"));
+  const html=(htmlEntries.find(([mime])=>/utf-8/.test(mime.toLowerCase()))||htmlEntries[0]||[])[1]||"";
+  return {
+    html,
+    epub:pick(mime=>mime.startsWith("application/epub+zip")),
+    pdf:pick(mime=>mime.startsWith("application/pdf")),
+    text:pick(mime=>mime.startsWith("text/plain")),
+    cover:pick(mime=>mime.startsWith("image/jpeg")||mime.startsWith("image/png"))
+  };
+}
+function gutenbergLanding(book){
+  return `https://www.gutenberg.org/ebooks/${encodeURIComponent(book.id)}`;
+}
+function gutenbergReaderUrl(book,html){
+  if(!html)return "";
+  const id=encodeURIComponent(book.id);
+  if(/\.html\.images$/i.test(html))return `https://www.gutenberg.org/cache/epub/${id}/pg${id}-images.html`;
+  if(/\.html$/i.test(html))return `https://www.gutenberg.org/cache/epub/${id}/pg${id}-h.html`;
+  return html.replace(/^http:/i,"https:");
+}
+function freeBookAuthor(book){
+  const names=(Array.isArray(book.authors)?book.authors:[]).map(author=>author&&author.name).filter(Boolean);
+  return names.length?names.join(", "):"Unknown author";
+}
+function freeBookDescription(book){
+  const summary=Array.isArray(book.summaries)&&book.summaries.length?book.summaries[0]:"";
+  const subjects=Array.isArray(book.subjects)&&book.subjects.length?book.subjects.slice(0,2).join(" · "):"";
+  return shortText(summary||subjects||"A public-domain book from Project Gutenberg.",180);
+}
+function freeBookCard(book){
+  const formats=freeBookFormats(book);
+  const title=book.title||"Untitled";
+  const author=freeBookAuthor(book);
+  const landing=gutenbergLanding(book);
+  const readerUrl=gutenbergReaderUrl(book,formats.html);
+  const downloads=[];
+  if(formats.epub)downloads.push({label:"EPUB",url:formats.epub});
+  if(formats.pdf)downloads.push({label:"PDF",url:formats.pdf});
+  if(formats.text)downloads.push({label:"Plain text",url:formats.text});
+  const readButton=readerUrl?`<button class="button button-primary freebook-read" data-action="freebook-read" data-id="${escapeHTML(String(book.id))}">Read Now</button>`:`<a class="button button-primary freebook-read" href="${escapeHTML(landing)}" target="_blank" rel="noopener">Read Now</a>`;
+  const downloadMenu=`<details class="download-menu"><summary class="button button-secondary">Download</summary><div class="download-menu-list">${downloads.map(item=>`<a href="${escapeHTML(item.url)}" target="_blank" rel="noopener">${escapeHTML(item.label)}</a>`).join("")}<a href="${escapeHTML(landing)}" target="_blank" rel="noopener">Official book page</a></div></details>`;
+  return `<article class="freebook-card"><div class="freebook-cover"><span class="freebook-cover-fallback">${escapeHTML(title)}</span>${formats.cover?`<img src="${escapeHTML(formats.cover)}" alt="Cover of ${escapeHTML(title)}" loading="lazy" onerror="this.style.display='none'">`:""}<span class="free-tag">FREE</span></div><div class="freebook-body"><span class="pill free-pill">Project Gutenberg</span><h3>${escapeHTML(title)}</h3><p class="freebook-author">${escapeHTML(author)}</p><p class="freebook-desc">${escapeHTML(freeBookDescription(book))}</p><div class="freebook-actions">${readButton}${downloadMenu}</div></div></article>`;
+}
+function renderFreeBooks(){
+  const chips=FREE_BOOKS_TOPICS.map(topic=>`<button class="filter-btn ${freeBooksTopic===topic.value?"active":""}" data-freebooks-topic="${topic.value}">${topic.label}</button>`).join("");
+  const cards=freeBooks.length?freeBooks.map(freeBookCard).join(""):freeBooksLoading?`<div class="empty-state"><strong>Loading free books…</strong><div>Fetching public-domain titles from Project Gutenberg.</div></div>`:freeBooksError?`<div class="empty-state"><strong>${escapeHTML(freeBooksError)}</strong><div>Project Gutenberg may be temporarily unavailable.</div><button class="button button-secondary" data-action="freebooks-retry" style="margin-top:12px">Try again</button></div>`:`<div class="empty-state"><strong>No books found.</strong><div>Try a different search or category.</div></div>`;
+  const count=freeBooks.length?`<p class="freebooks-count">Showing ${freeBooks.length}${freeBooksCount>freeBooks.length?` of ${freeBooksCount}`:""} free books${freeBooksLoading?" · Updating catalog…":""}</p>`:"";
+  const notice=freeBooks.length&&freeBooksError?`<div class="freebooks-notice"><span>${escapeHTML(freeBooksError)} Showing a starter collection from Project Gutenberg.</span><button class="button button-secondary" data-action="freebooks-retry">Retry full catalog</button></div>`:"";
+  const more=freeBooksNext?`<div class="freebooks-more"><button class="button button-primary" data-action="freebooks-load-more" ${freeBooksLoadingMore?"disabled":""}>${freeBooksLoadingMore?"Loading more…":"Load more books"}</button></div>`:"";
+  return `<section class="page-heading"><div><p class="eyebrow">FREE BOOKS LIBRARY</p><h1>Read a classic, free.</h1><p class="subtitle">Public-domain books from Project Gutenberg with covers, downloads, and instant reading.</p></div><span class="pill free-pill">Powered by Gutendex</span></section><div class="toolbar freebooks-toolbar"><input class="field search-field" id="freeBooksSearch" placeholder="Search by title or author..." value="${escapeHTML(freeBooksQuery)}" aria-label="Search free books by title or author"></div><div class="task-filters">${chips}</div>${count}${notice}<div class="freebook-grid">${cards}</div>${more}`;
+}
+function renderFreeBooksView(expectedKey){
+  if(currentPage!=="freebooks" && currentPage!=="free-books")return;
+  if(expectedKey&&freeBooksUrl()!==expectedKey)return;
+  const active=document.activeElement;
+  const restore=active&&active.id==="freeBooksSearch";
+  const pos=restore?active.selectionStart:null;
+  renderPage();
+  if(restore){
+    const field=$("#freeBooksSearch");
+    if(field){field.focus();if(typeof pos==="number")field.setSelectionRange(pos,pos);}
+  }
+}
+async function loadFreeBooks(reset=true,force=false){
+  const key=freeBooksUrl();
+  if(reset){
+    if(freeBooksAbort)freeBooksAbort.abort();
+    freeBooksRequest++;
+    freeBooksLoading=true;freeBooksError="";freeBooksNext="";freeBooksCount=0;
+    if(freeBooksKey!==key)freeBooks=[];
+    freeBooksKey=key;
+    const cached=force?null:freeBooksCache[key];
+    if(cached&&cached.books&&cached.books.length){
+      freeBooks=cached.books;freeBooksNext=cached.next||"";freeBooksCount=cached.count||cached.books.length;freeBooksLoading=false;
+      renderFreeBooksView(key);
+      return;
+    }
+    if(!freeBooks.length)renderFreeBooksView(key);
+  }else{
+    if(freeBooksLoadingMore||!freeBooksNext)return;
+    freeBooksLoadingMore=true;renderFreeBooksView(key);
+  }
+  const requestId=++freeBooksRequest;
+  const controller=new AbortController();freeBooksAbort=controller;
+  const timer=setTimeout(()=>controller.abort(),FREE_BOOKS_TIMEOUT);
+  try{
+    const targetUrl=reset?key:freeBooksNext;
+    const res=await fetch(targetUrl,{signal:controller.signal});
+    clearTimeout(timer);
+    if(!res.ok)throw new Error("Request failed");
+    const data=await res.json();
+    if(requestId!==freeBooksRequest)return;
+    const results=Array.isArray(data.results)?data.results:[];
+    if(reset&&!results.length){freeBooks=fallbackFreeBooks();freeBooksNext="";freeBooksCount=freeBooks.length;freeBooksError="";}
+    else{freeBooks=reset?results:[...freeBooks,...results];freeBooksNext=data.next||"";freeBooksCount=Number(data.count)||freeBooks.length;freeBooksError="";}
+    freeBooksCache[key]={books:freeBooks,next:freeBooksNext,count:freeBooksCount,ts:Date.now()};
+  }catch(error){
+    clearTimeout(timer);
+    if(requestId!==freeBooksRequest)return;
+    if(reset){
+      if(freeBooks.length){
+        showToast("Could not refresh free books.");
+      }else{
+        freeBooks=fallbackFreeBooks();
+        freeBooksNext="";
+        freeBooksCount=freeBooks.length;
+        freeBooksError="";
+      }
+    }else{
+      showToast("Could not load more books.");
+    }
+  }finally{
+    if(requestId===freeBooksRequest){
+      freeBooksLoading=false;freeBooksLoadingMore=false;
+      if(freeBooksAbort===controller)freeBooksAbort=null;
+      renderFreeBooksView(key);
+    }
+  }
+}
+function saveReaderPrefs(){
+  try{localStorage.setItem("daymark-reader-prefs",JSON.stringify({fontScale:readerFontScale,dark:readerDark}));}catch{}
+}
+function applyReaderSettings(){
+  const frame=$("#gutenbergReaderFrame");
+  const shell=$("#readerShell");
+  if(shell)shell.classList.toggle("reader-dark",readerDark);
+  if(!frame)return;
+  frame.style.transformOrigin="top left";
+  frame.style.transform=readerFontScale===1?"":`scale(${readerFontScale})`;
+  frame.style.width=readerFontScale===1?"100%":`${100/readerFontScale}%`;
+  frame.style.height=readerFontScale===1?"100%":`${100/readerFontScale}%`;
+}
+function renderReader(){
+  const book=readerBook;
+  const back=`<button class="button button-secondary" data-page="freebooks">← Back to Free Books</button>`;
+  if(!book)return `<section class="page-heading"><div><p class="eyebrow">READER</p><h1>No book open.</h1><p class="subtitle">Choose a free book to start reading.</p></div><button class="button button-primary" data-page="freebooks">Browse Free Books</button></section>`;
+  const formats=freeBookFormats(book);
+  const landing=gutenbergLanding(book);
+  const readerUrl=gutenbergReaderUrl(book,formats.html);
+  if(!readerUrl){
+    return `<section class="page-heading"><div><p class="eyebrow">READER</p><h1>${escapeHTML(book.title||"Untitled")}</h1><p class="subtitle">${escapeHTML(freeBookAuthor(book))}</p></div>${back}</section><div class="empty-state"><strong>No HTML reading version is available.</strong><div>Open the official Project Gutenberg page to choose a reading format.</div><a class="button button-primary" style="margin-top:14px" href="${escapeHTML(landing)}" target="_blank" rel="noopener">Open on Project Gutenberg</a></div>`;
+  }
+  return `<section class="reader-page"><div class="reader-toolbar"><div class="reader-toolbar-main">${back}<div><p class="eyebrow">READING NOW</p><h1>${escapeHTML(book.title||"Untitled")}</h1><p class="subtitle">${escapeHTML(freeBookAuthor(book))}</p></div></div><div class="reader-controls" role="group" aria-label="Reader settings"><button class="icon-btn" data-action="reader-font-dec" aria-label="Decrease text size">A-</button><button class="icon-btn" data-action="reader-font-inc" aria-label="Increase text size">A+</button><button class="icon-btn" data-action="reader-theme" aria-label="Toggle reading theme">◐</button><a class="button button-secondary" href="${escapeHTML(readerUrl)}" target="_blank" rel="noopener">Open in new tab</a></div></div><div class="reader-shell ${readerDark?"reader-dark":""}" id="readerShell"><iframe id="gutenbergReaderFrame" src="${escapeHTML(readerUrl)}" title="${escapeHTML(book.title||"Book")}" referrerpolicy="no-referrer"></iframe></div><div class="reader-note"><span class="pill free-pill">Project Gutenberg</span><span class="subtitle">Public-domain edition, served by Project Gutenberg.</span><a href="${escapeHTML(landing)}" target="_blank" rel="noopener">View official book page</a></div></section>`;
+}
+function openFreeBookReader(book){
+  readerBook=book;
+  setPage("reader");
+}
 function shelfForm(){
   openModal("Create a shelf",`<form id="shelfForm" class="form-stack">${formField("Shelf name","shelfName","","text",true)}<div class="form-field"><label for="shelfCategory">Category</label><select class="field" id="shelfCategory">${categoryNames.filter(n=>n!=="Favorites").map(n=>`<option>${n}</option>`).join("")}</select></div><div class="form-actions"><button type="button" class="button button-secondary" id="cancelForm">Cancel</button><button type="submit" class="button button-primary">Create shelf</button></div></form>`);
   $("#cancelForm").onclick=closeModal;$("#shelfForm").onsubmit=e=>{e.preventDefault();const name=$("#shelfName").value.trim();if(!name)return;state.shelves.push({id:uid(),name,category:$("#shelfCategory").value});persist();closeModal();renderPage();showToast("Shelf created");};
@@ -399,6 +952,12 @@ document.addEventListener("click",e=>{
   const pageBtn=e.target.closest("[data-page]");if(pageBtn){e.preventDefault();setPage(pageBtn.dataset.page);return;}
   const actionBtn=e.target.closest("[data-action]");if(!actionBtn)return;
   const {action,id}=actionBtn.dataset;
+  if(action==="freebook-read"){const book=freeBooks.find(item=>String(item.id)===String(id));if(book)openFreeBookReader(book);return;}
+  if(action==="freebooks-load-more"){loadFreeBooks(false);return;}
+  if(action==="freebooks-retry"){loadFreeBooks(true,true);return;}
+  if(action==="reader-font-dec"){readerFontScale=Math.max(.8,Number((readerFontScale-.1).toFixed(2)));applyReaderSettings();saveReaderPrefs();return;}
+  if(action==="reader-font-inc"){readerFontScale=Math.min(1.6,Number((readerFontScale+.1).toFixed(2)));applyReaderSettings();saveReaderPrefs();return;}
+  if(action==="reader-theme"){readerDark=!readerDark;applyReaderSettings();saveReaderPrefs();return;}
   if(action==="new-task")taskForm();if(action==="edit-task"){const t=state.tasks.find(x=>x.id===id);if(t)taskForm(t);}
   if(action==="delete-task"&&confirm("Delete this task?")){state.tasks=state.tasks.filter(t=>t.id!==id);persist();renderPage();showToast("Task deleted");}
   if(action==="new-book")bookForm();if(action==="new-entry")entryForm();if(action==="edit-entry"){const entry=state.entries.find(x=>x.id===id);if(entry)entryForm(entry);}
@@ -432,17 +991,68 @@ document.addEventListener("click",e=>{
   }
   if(e.target.id==="settingsTheme")toggleTheme();
 });
-$("#installBtn").addEventListener("click",async()=>{if(deferredInstallPrompt){deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;$("#installBtn").hidden=true;}else if(/iphone|ipad|ipod/i.test(navigator.userAgent)){showToast("To install: tap Share, then Add to Home Screen.");}else showToast("Use your browser menu and choose Install app or Add to Home screen.");});
+$("#installBtn").addEventListener("click",async()=>{if(deferredInstallPrompt){try{deferredInstallPrompt.prompt();const choice=await deferredInstallPrompt.userChoice;if(choice.outcome==="accepted"){deferredInstallPrompt=null;updateMode();showToast("DAYMARK JOURNAL installed");}else{showToast("Installation cancelled");}}catch{showToast("Installation not available.");}}else if(isInstalled()){showToast("Already installed.");}else if(/iphone|ipad|ipod/i.test(navigator.userAgent)){showToast("To install: tap Share, then Add to Home Screen.");}else{showToast("Not installable yet. Use browser menu: Install app or Add to Home screen.");}});
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstallPrompt=e;$("#installBtn").hidden=false;});
 window.addEventListener("appinstalled",()=>{deferredInstallPrompt=null;updateMode();showToast("DAYMARK JOURNAL installed");});
 window.matchMedia("(display-mode: standalone)").addEventListener?.("change",updateMode);
 
 async function init(){
-  updateMode();document.body.classList.toggle("dark",state.settings.theme==="dark");
-  await new Promise(resolve=>setTimeout(resolve,800));
-  $("#splash").style.opacity="0";setTimeout(()=>{$("#splash").hidden=true;if(!state.onboarding.completed){$("#appShell").hidden=true;$("#onboarding").hidden=false;renderOnboardingFlow();}else{$("#appShell").hidden=false;renderPage();}},350);
-  if("serviceWorker" in navigator && location.protocol!=="file:"){navigator.serviceWorker.register("./sw.js").catch(()=>{});}
-  setInterval(checkGoalAlerts,60000);
-  setInterval(()=>{if(currentPage==="home"&&!pageLoaderTimer){const h=$("#mainContent h1");if(h)h.textContent=`${timeGreeting()}, ${state.profile.name||"Daymark"}.`;}},60000);
+  updateMode();
+  document.body.classList.toggle("dark", state.settings.theme === "dark");
+  await new Promise(resolve => setTimeout(resolve, 800));
+  $("#splash").style.opacity = "0";
+  setTimeout(() => {
+    $("#splash").hidden = true;
+    if(!state.onboarding.completed){
+      $("#appShell").hidden = true;
+      $("#onboarding").hidden = false;
+      renderOnboardingFlow();
+    } else {
+      $("#appShell").hidden = false;
+      currentPage = getInitialPage();
+      updateDocumentTitle(currentPage);
+      $(".nav-link,.bottom-link,#mobileMenu button").forEach(b => b.classList.toggle("active", b.dataset.page === currentPage));
+      if(currentPage === "freebooks" && !freeBooks.length) loadFreeBooks(true);
+      else if(currentPage === "discover" && !discoverBooks.length) fetchDiscover(discoverCategory);
+      renderPage();
+      if(currentPage !== "discover") prefetchDiscover(discoverCategory);
+    }
+  }, 350);
+  if("serviceWorker" in navigator && location.protocol !== "file:"){
+    navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+  setInterval(checkGoalAlerts, 60000);
+  setInterval(() => {
+    if(currentPage === "home" && !pageLoaderTimer){
+      const h = $("#mainContent h1");
+      if(h) h.textContent = `${timeGreeting()}, ${state.profile.name || "Daymark"}.`;
+    }
+  }, 60000);
 }
+
+window.addEventListener("popstate", e => {
+  const p = (e.state && e.state.page) || getInitialPage();
+  setPage(p, false);
+});
+window.addEventListener("hashchange", () => {
+  const p = getInitialPage();
+  setPage(p, false);
+});
+
 init();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
