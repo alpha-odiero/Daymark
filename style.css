@@ -1,6 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 
-:root{--bg:#f7f6f3;--surface:#fff;--text:#171717;--muted:#6f6a62;--line:#e7e2d9;--yellow:#ffc400;--yellow-hover:#efb400;--navy:#171a30;--blue:#46b8f2;--purple:#b58af4;--peach:#ffad72;--green:#18845b;--shadow:0 10px 30px rgba(30,26,18,.05);--radius:20px}
+:root{--bg:#C6C1F4;--surface:#FFFFFF;--text:#17152B;--muted:#9292A3;--line:#E9E8F0;--accent:#B9B1F2;--accent-hover:#a8a0e6;--navy:#17132D;--blue:#46b8f2;--pink:#EC83D8;--orange:#FFB467;--green:#18845b;--shadow:0 10px 30px rgba(30,26,18,.05);--radius:20px;--workspace:#F5F5FA}
 *{box-sizing:border-box}
 html,body{overflow-x:hidden}
 body{margin:0;background:var(--bg);color:var(--text);font-family:"DM Sans",system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -23,6 +23,17 @@ button:disabled{opacity:.6;cursor:wait}
 .desktop-nav{display:flex;align-items:center;gap:8px;margin:auto}
 .nav-link,.mobile-menu button{border:0;background:transparent;color:var(--muted);padding:9px 14px;border-radius:999px}
 .nav-link.active,.nav-link:hover{background:#fff;color:var(--text);box-shadow:0 1px 0 rgba(30,26,18,.02)}
+.nav-dropdown{position:relative;display:flex;align-items:center}
+.nav-dropdown-toggle{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.nav-caret{font-size:10px;line-height:1;transition:transform .18s ease}
+.nav-dropdown.open .nav-caret{transform:rotate(180deg)}
+.nav-dropdown.open .nav-dropdown-toggle{background:#fff;color:var(--text)}
+body.menu-open{overflow:hidden}
+.nav-dropdown-menu{position:absolute;top:calc(100% + 10px);left:0;z-index:50;min-width:200px;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 50px rgba(30,26,18,.14);padding:6px;display:grid;gap:2px}
+.nav-dropdown-menu button{width:100%;text-align:left;border:0;background:transparent;color:var(--text);padding:10px 12px;border-radius:10px;font-weight:600}
+.nav-dropdown-menu button:hover,.nav-dropdown-menu button.active{background:var(--bg);color:var(--text)}
+body.dark .nav-dropdown-menu button:hover,body.dark .nav-dropdown-menu button.active{background:#292a32}
+body.dark .nav-dropdown.open .nav-dropdown-toggle{background:#292a32}
 .top-actions{display:flex;align-items:center;gap:10px}
 .icon-btn{width:42px;height:42px;display:inline-grid;place-items:center;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:50%;font-size:19px;transition:background .18s,border-color .18s}
 .menu-toggle{display:none}
@@ -159,6 +170,21 @@ body.dark .button-secondary,body.dark .small-btn,body.dark .filter-btn{backgroun
 body.dark .filter-btn.active{background:var(--yellow);color:#171717}
 body.dark .shelf-art .mini-cover:nth-child(2){color:#fff}
 @media(max-width:900px){.topbar{gap:15px;padding:0 22px}.desktop-nav{gap:0}.nav-link{padding:9px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.book-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.category-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:980px){
+  .desktop-nav{display:none}
+  .menu-toggle{display:inline-grid;width:38px;height:38px;font-size:18px}
+  .top-actions{margin-left:auto}
+  .mobile-menu{position:fixed;top:74px;left:12px;right:12px;z-index:40;max-height:calc(100dvh - 86px);overflow-y:auto;overscroll-behavior:contain;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:8px;box-shadow:var(--shadow);display:none;grid-template-columns:1fr;gap:2px}
+  .mobile-menu:not([hidden]){display:grid}
+  .mobile-menu button{text-align:left;padding:10px 14px;border-radius:12px;width:100%;min-height:44px}
+  .mobile-menu button:hover,.mobile-menu button.active{background:var(--bg);color:var(--text)}
+  body.dark .mobile-menu button:hover,body.dark .mobile-menu button.active{background:#292a32}
+  .mobile-nav-group{display:grid;gap:2px}
+  .mobile-nav-toggle{display:flex;align-items:center;justify-content:space-between;font-weight:700;color:var(--text)}
+  .mobile-submenu{display:grid;gap:2px;margin:2px 6px 6px 12px;padding-left:10px;border-left:2px solid var(--line)}
+  .mobile-submenu button{font-size:14px;padding-left:14px;min-height:42px}
+  .mobile-menu-divider{height:1px;background:var(--line);margin:6px 8px}
+}
 @media(max-width:680px){
   .topbar{height:66px;padding:0 14px;gap:10px}.menu-toggle{display:inline-grid;width:38px;height:38px;font-size:18px}.brand{font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis}.desktop-nav{display:none}.top-actions{margin-left:auto}.top-actions .icon-btn{width:38px;height:38px}.install-btn{padding:8px 10px;font-size:11px}
   .mobile-menu{position:fixed;top:66px;left:10px;right:10px;z-index:40;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:8px;box-shadow:var(--shadow);display:none;grid-template-columns:1fr;gap:2px}
@@ -312,7 +338,7 @@ body.dark .setting-icon{background:#292a32}
 }
 
 /* Free Books */
-.freebook-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.freebook-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
 .freebook-grid .empty-state{grid-column:1/-1}
 .freebook-card{display:grid;grid-template-columns:126px minmax(0,1fr);gap:16px;padding:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
 .freebook-cover{position:relative;aspect-ratio:3/4;border-radius:12px;overflow:hidden;background:linear-gradient(145deg,#efe7d2,#d8cbb0);display:flex;align-items:center;justify-content:center;padding:12px}
@@ -324,8 +350,10 @@ body.dark .setting-icon{background:#292a32}
 .freebook-author{margin:0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .freebook-desc{margin:7px 0 10px;font-size:12px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .free-pill{background:#fff1bd;color:#6e5600}
-.freebook-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:auto}
-.freebook-read{padding:8px 13px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
+.freebook-actions{display:flex;gap:8px;align-items:stretch;flex-wrap:nowrap;margin-top:auto;width:100%}
+.freebook-actions .freebook-read{flex:1 1 0;justify-content:center;min-width:0;padding:8px 13px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
+.freebook-actions .download-menu{flex:0 0 auto}
+.freebook-actions .download-menu summary{white-space:nowrap}
 .download-menu{position:relative}
 .download-menu summary{display:inline-flex;align-items:center;padding:8px 12px;font-size:12px;cursor:pointer;list-style:none;border-radius:12px}
 .download-menu summary::-webkit-details-marker{display:none}
@@ -335,7 +363,13 @@ body.dark .setting-icon{background:#292a32}
 .download-menu-list a:hover{background:var(--bg)}
 .freebooks-toolbar .search-field{flex:1;min-width:240px}
 .freebooks-count{margin:0 0 14px;color:var(--muted);font-size:12px}
-.freebooks-more{display:flex;justify-content:center;margin-top:20px}
+.freebooks-notice,.inline-notice{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#fff8e7;border:1px solid #efe0b8;color:#6d5520;border-radius:14px;padding:10px 14px;margin:0 0 14px;font-size:13px}
+.freebooks-notice .button,.inline-notice .button{padding:7px 12px;font-size:12px}
+body.dark .freebooks-notice,body.dark .inline-notice{background:#332d20;border-color:#4b4029;color:#e9d8aa}
+.freebooks-more,.load-more{display:flex;justify-content:center;margin-top:20px}
+.load-more-sentinel{width:100%;height:1px}
+.install-help ol{margin:12px 0;padding-left:22px;display:grid;gap:8px;font-size:14px}
+.install-help .subtitle{max-width:none}
 .reader-page{display:grid;gap:16px}
 .reader-toolbar{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
 .reader-toolbar-main{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
@@ -362,7 +396,7 @@ body.dark .reader-note a{color:#ffd95e}
   .freebook-body h3{font-size:15px}
   .freebook-desc{-webkit-line-clamp:2}
   .freebook-actions{gap:6px}
-  .freebook-read,.download-menu summary{padding:7px 10px;font-size:11px}
+  .freebook-actions .freebook-read,.freebook-actions .download-menu summary{padding:7px 10px;font-size:11px}
   .freebooks-toolbar .search-field{min-width:0}
   .reader-toolbar{align-items:stretch;flex-direction:column}
   .reader-toolbar-main{flex-direction:column;align-items:flex-start;gap:10px}
@@ -371,3 +405,4 @@ body.dark .reader-note a{color:#ffd95e}
   .reader-shell{height:70vh;min-height:360px;border-radius:14px}
   .reader-note{flex-direction:column;align-items:flex-start;gap:6px}
 }
+

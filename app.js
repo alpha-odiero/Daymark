@@ -44,11 +44,15 @@ if (state.settings.onboarded && !state.onboarding.completed) {
 
 const PAGE_ALIASES = {
   home: "home",
+  landing: "landing",
+  dashboard: "home",
   freebooks: "freebooks",
   "free-books": "freebooks",
   "free_books": "freebooks",
   freebook: "freebooks",
   discover: "discover",
+  "get-inspired": "discover",
+  getinspired: "discover",
   reader: "reader",
   library: "library",
   journal: "journal",
@@ -66,8 +70,9 @@ const PAGE_ALIASES = {
 
 const PAGE_TITLES = {
   home: "Daymark JOURNAL",
+  landing: "Daymark JOURNAL",
   freebooks: "Free Books — Daymark JOURNAL",
-  discover: "Discover — Daymark JOURNAL",
+  discover: "Get Inspired — Daymark JOURNAL",
   reader: "Reader — Daymark JOURNAL",
   library: "My Library — Daymark JOURNAL",
   journal: "My Journal — Daymark JOURNAL",
@@ -104,7 +109,7 @@ function getInitialPage(){
     }
   } catch {}
 
-  return "home";
+  return "landing";
 }
 
 function updateDocumentTitle(page){
@@ -121,10 +126,14 @@ let deferredInstallPrompt = null;
 let discoverCategory="Technology";
 let discoverBooks=[];
 let discoverLoading=false;
+let discoverLoadingMore=false;
 let discoverError="";
+let discoverPage=1;
+let discoverHasMore=true;
 let toastTimer;
 let goalClock = null;
 let pageLoaderTimer = null;
+let lazyObserver = null;
 let discoverRequest = 0;
 let discoverDetailToken = 0;
 let freeBooks=[];
@@ -206,30 +215,51 @@ function fallbackBooks(category){
 function readDiscoverCache(){
   try{const cache=JSON.parse(localStorage.getItem(DISCOVER_CACHE_KEY)||"{}");return cache&&typeof cache==="object"?cache:{};}catch{return{};}
 }
-function writeDiscoverCache(category,books){
-  try{const cache=readDiscoverCache();cache[category]={books,ts:Date.now()};localStorage.setItem(DISCOVER_CACHE_KEY,JSON.stringify(cache));}catch{}
+function writeDiscoverCache(category,books,page=1,hasMore=true){
+  try{const cache=readDiscoverCache();cache[category]={books,page,hasMore,ts:Date.now()};localStorage.setItem(DISCOVER_CACHE_KEY,JSON.stringify(cache));}catch{}
 }
 function mapDiscoverDoc(doc){
   return {title:doc.title||"Untitled",author:(doc.author_name||[]).join(", ")||"Unknown author",year:doc.first_publish_year||"",pages:doc.number_of_pages_median||"",key:doc.key||"",cover:doc.cover_i?`https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`:"",url:`https://openlibrary.org${doc.key}`};
 }
-async function requestDiscoverBooks(category){
-  const res=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(category)}&limit=12&fields=title,author_name,first_publish_year,cover_i,key,number_of_pages_median`);
+async function requestDiscoverBooks(category,page=1){
+  const limit=12;
+  const res=await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(category)}&limit=${limit}&page=${page}&fields=title,author_name,first_publish_year,cover_i,key,number_of_pages_median`);
   if(!res.ok)throw new Error("Request failed");
   const data=await res.json();
-  return (data.docs||[]).map(mapDiscoverDoc);
+  const books=(data.docs||[]).map(mapDiscoverDoc);
+  const start=Number(data.start)||0;
+  const total=Number(data.numFound)||0;
+  const hasMore=books.length>=limit && (total?start+books.length<total:true);
+  return {books,hasMore};
 }
 async function prefetchDiscover(category){
   if(readDiscoverCache()[category])return;
-  try{const books=await requestDiscoverBooks(category);if(books.length)writeDiscoverCache(category,books);}catch{}
+  try{const result=await requestDiscoverBooks(category,1);if(result.books.length)writeDiscoverCache(category,result.books,1,result.hasMore);}catch{}
 }
 
 function todayISO(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 function uid(){ return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`; }
 function escapeHTML(value=""){return String(value).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function cloneValue(value){try{return typeof structuredClone==="function"?structuredClone(value):JSON.parse(JSON.stringify(value));}catch{return JSON.parse(JSON.stringify(value));}}
 function loadState(){
-  try{const saved=localStorage.getItem(STORAGE_KEY);if(saved){const parsed=JSON.parse(saved);return {...structuredClone(defaultState),...parsed,profile:{...defaultState.profile,...parsed.profile},settings:{...defaultState.settings,...parsed.settings}};}}
+  const defaults=cloneValue(defaultState);
+  try{
+    const saved=localStorage.getItem(STORAGE_KEY);
+    if(saved){
+      const parsed=JSON.parse(saved);
+      const merged={
+        ...defaults,
+        ...parsed,
+        profile:{...defaults.profile,...parsed.profile},
+        onboarding:{...defaults.onboarding,...parsed.onboarding},
+        settings:{...defaults.settings,...parsed.settings}
+      };
+      ["books","shelves","tasks","goals","entries"].forEach(key=>{if(!Array.isArray(merged[key]))merged[key]=[];});
+      return merged;
+    }
+  }
   catch(error){console.warn("Could not read data; using defaults.",error);}
-  return structuredClone(defaultState);
+  return defaults;
 }
 function persist(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));return true;}catch(error){console.error(error);showToast("Could not save.");return false;}}
 function showToast(message){const el=$("#toast");el.textContent=message;el.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),2600);}
@@ -237,16 +267,48 @@ function simulateRequest(action, delay=420){return new Promise((resolve,reject)=
 function dateLabel(value){if(!value)return "No due date";const d=new Date(`${value}T12:00:00`);return d.toLocaleDateString(undefined,{month:"short",day:"numeric",year:d.getFullYear()!==new Date().getFullYear()?"numeric":undefined});}
 function timeGreeting(){const h=new Date().getHours();return h<12?"Good morning":h<18?"Good afternoon":"Good evening";}
 function isInstalled(){return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone===true;}
-function updateMode(){document.body.classList.toggle("installed",isInstalled());$("#installBtn").hidden=isInstalled();}
+function updateMode(){
+  const installed=isInstalled();
+  document.body.classList.toggle("installed",installed);
+  const btn=$("#installBtn");
+  if(btn)btn.hidden=installed;
+}
 function showPageLoader(){const loader=$("#pageLoader");if(loader){loader.hidden=false;document.body.classList.add("is-loading");}}
 function hidePageLoader(){const loader=$("#pageLoader");if(loader){loader.hidden=true;document.body.classList.remove("is-loading");}}
+function closeNavDropdowns(except){
+  $$("[data-nav-dropdown]").forEach(drop=>{
+    if(drop===except)return;
+    const toggle=$("[data-nav-toggle]",drop);
+    const menu=$(".nav-dropdown-menu,.mobile-submenu",drop);
+    if(menu)menu.hidden=true;
+    if(toggle)toggle.setAttribute("aria-expanded","false");
+    drop.classList.remove("open");
+  });
+}
+function updateNavState(page){
+  $$(".nav-link,.bottom-link,#mobileMenu button").forEach(b=>{
+    if(b.dataset.page)b.classList.toggle("active",b.dataset.page===page);
+  });
+  $$("[data-nav-dropdown]").forEach(drop=>{
+    const pages=(drop.dataset.pages||"").split(/\s+/).filter(Boolean);
+    const active=pages.includes(page);
+    drop.classList.toggle("active",active);
+    $("[data-nav-toggle]",drop)?.classList.toggle("active",active);
+  });
+}
+function closeMobileMenu(){
+  const menu=$("#mobileMenu");
+  if(menu)menu.hidden=true;
+  document.body.classList.remove("menu-open");
+  $("#menuToggle")?.setAttribute("aria-expanded","false");
+  closeNavDropdowns();
+}
 function setPage(page, updateHistory = true){
   const targetPage = resolvePage(page) || "home";
+  closeMobileMenu();
   if(targetPage === currentPage && !pageLoaderTimer) return;
   currentPage = targetPage;
-  $("#mobileMenu").hidden = true;
-  $("#menuToggle").setAttribute("aria-expanded", "false");
-  $$(".nav-link,.bottom-link,#mobileMenu button").forEach(b => b.classList.toggle("active", b.dataset.page === targetPage));
+  updateNavState(targetPage);
 
   if(updateHistory){
     try {
@@ -264,10 +326,12 @@ function setPage(page, updateHistory = true){
   if(targetPage === "freebooks" && !freeBooks.length && !freeBooksLoading && !freeBooksError) loadFreeBooks(true);
   pageLoaderTimer = setTimeout(() => {
     pageLoaderTimer = null;
-    try { renderPage(); } finally { hidePageLoader(); }
+    try { renderPage(); }
+    catch(error){ console.error("Could not render page.",error); renderFatalError(error); }
+    finally { hidePageLoader(); }
     $("#mainContent").focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: "smooth" });
-  }, quickPage ? 0 : 1200);
+  }, quickPage ? 0 : 80);
 }
 function coverFor(book){return book.image||(categoryCovers[book.category]||{}).image||"";}
 function shelfBooks(category){
@@ -278,9 +342,17 @@ function shelfBooks(category){
 }
 function bookCover(book){const image=coverFor(book);return `<div class="book-cover ${escapeHTML(book.cover||"cover-cream")}">${image?`<img class="cover-img" src="${escapeHTML(image)}" alt="Cover of ${escapeHTML(book.title)}" loading="lazy" onerror="this.style.display='none'">`:""}<strong>${escapeHTML(book.title)}</strong><small>${escapeHTML(book.author)}</small></div>`;}
 function emptyState(title,description,action,label){return `<div class="empty-state"><strong>${escapeHTML(title)}</strong><div>${escapeHTML(description)}</div>${action?`<button class="button button-primary" style="margin-top:16px" data-action="${action}">${escapeHTML(label||"Add new")}</button>`:""}</div>`;}
+function renderFatalError(error){
+  const message=error&&error.message?error.message:"Something went wrong.";
+  $("#mainContent").innerHTML=`<section class="page-heading"><div><p class="eyebrow">SOMETHING WENT WRONG</p><h1>We couldn't load this page.</h1><p class="subtitle">${escapeHTML(message)}</p></div></section><div class="empty-state"><strong>Try refreshing the app.</strong><div>Your saved data is still safe on this device.</div><button class="button button-primary" style="margin-top:16px" data-action="reload-app">Reload app</button></div>`;
+  $("#appShell").hidden=false;
+  $("#splash").hidden=true;
+  hidePageLoader();
+}
 function renderPage(){
   const pages = {
     home: renderHome,
+    landing: renderLanding,
     discover: renderDiscover,
     freebooks: renderFreeBooks,
     "free-books": renderFreeBooks,
@@ -298,21 +370,46 @@ function renderPage(){
   const activePage = resolvePage(currentPage) || "home";
   currentPage = activePage;
   $("#mainContent").innerHTML = (pages[activePage] || renderHome)();
-  $$(".nav-link,.bottom-link,#mobileMenu button").forEach(b => b.classList.toggle("active", b.dataset.page === activePage));
+  updateNavState(activePage);
   updateDocumentTitle(activePage);
   bindPageEvents();
+  setupLazyLoading();
   if(activePage === "discover" && !discoverBooks.length && !discoverLoading && !discoverError) fetchDiscover(discoverCategory);
   if(activePage === "freebooks" && !freeBooks.length && !freeBooksLoading && !freeBooksError) loadFreeBooks(true);
   if(activePage === "reader") applyReaderSettings();
   if(activePage === "goals") startGoalClock();
   else if(goalClock){ clearInterval(goalClock); goalClock = null; }
 }
+function setupLazyLoading(){
+  if(lazyObserver){lazyObserver.disconnect();lazyObserver=null;}
+  if(!("IntersectionObserver" in window))return;
+  const targets=["#discoverSentinel","#freeBooksSentinel"].map(selector=>$(selector)).filter(Boolean);
+  if(!targets.length)return;
+  lazyObserver=new IntersectionObserver(entries=>{
+    entries.forEach(entry=>{
+      if(!entry.isIntersecting)return;
+      if(entry.target.id==="discoverSentinel"){
+        if(discoverHasMore&&!discoverLoading&&!discoverLoadingMore)fetchDiscover(discoverCategory,false,true);
+      }
+      if(entry.target.id==="freeBooksSentinel"){
+        if(freeBooksNext&&!freeBooksLoading&&!freeBooksLoadingMore)loadFreeBooks(false);
+      }
+    });
+  },{rootMargin:"500px 0px"});
+  targets.forEach(target=>lazyObserver.observe(target));
+}
 function renderDiscover(){
   const cats=["Technology","Programming","Business","Personal Development","Psychology","Fiction","Mystery","Romance","Fantasy","Science","History","Biography"];
   const chips=cats.map(c=>`<button class="filter-btn ${discoverCategory===c?"active":""}" data-discover-cat="${c}">${c}</button>`).join("");
-  const cards=discoverLoading?`<div class="empty-state"><strong>Loading recommendations…</strong></div>`:discoverError?`<div class="empty-state"><strong>${escapeHTML(discoverError)}</strong><button class="button button-secondary" data-action="discover-retry" style="margin-top:10px">Retry</button></div>`:discoverBooks.length?discoverBooks.map((b,i)=>`<article class="book-card" data-discover-idx="${i}" tabindex="0" role="button" aria-label="View details for ${escapeHTML(b.title)}"><div class="book-cover">${b.cover?`<img src="${escapeHTML(b.cover)}" alt="" loading="lazy" onerror="this.style.display='none'">`:""}</div><div class="book-info"><strong>${escapeHTML(b.title)}</strong><small>${escapeHTML(b.author)}${b.year?` · ${b.year}`:""}</small><div style="display:flex;gap:8px;margin-top:8px"><button class="small-btn add-library-btn" data-action="discover-add" data-idx="${i}" style="background:#111;color:#fff;border-color:#111">Add to Library</button></div></div></article>`).join(""):`<div class="empty-state"><strong>No results.</strong>Try another category.</div>`;
-  return `<section class="page-heading"><div><p class="eyebrow">DISCOVER</p><h1>What should I read?</h1><p class="subtitle">Real recommendations from Open Library.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button-primary" data-page="freebooks">Free Books</button><button class="button button-secondary" data-action="discover-surprise">Surprise Me</button><button class="button button-secondary" data-action="discover-refresh">Refresh</button></div></section><div class="task-filters" style="flex-wrap:wrap">${chips}</div><div class="book-grid">${cards}</div>`;
-}function renderHome(){
+  const bookCards=discoverBooks.map((b,i)=>`<article class="book-card" data-discover-idx="${i}" tabindex="0" role="button" aria-label="View details for ${escapeHTML(b.title)}"><div class="book-cover">${b.cover?`<img src="${escapeHTML(b.cover)}" alt="" loading="lazy" onerror="this.style.display='none'">`:""}</div><div class="book-info"><strong>${escapeHTML(b.title)}</strong><small>${escapeHTML(b.author)}${b.year?` · ${b.year}`:""}</small><div style="display:flex;gap:8px;margin-top:8px"><button class="small-btn add-library-btn" data-action="discover-add" data-idx="${i}" style="background:#111;color:#fff;border-color:#111">Add to Library</button></div></div></article>`).join("");
+  const notice=discoverBooks.length&&discoverError?`<div class="inline-notice"><span>${escapeHTML(discoverError)}</span><button class="button button-secondary" data-action="discover-retry">Retry</button></div>`:"";
+  const cards=discoverLoading?`<div class="empty-state discover-loading"><strong>Loading recommendations…</strong><div>Finding books for you.</div></div>`:discoverBooks.length?notice+bookCards:discoverError?`<div class="empty-state"><strong>${escapeHTML(discoverError)}</strong><button class="button button-secondary" data-action="discover-retry" style="margin-top:10px">Retry</button></div>`:`<div class="empty-state"><strong>No results.</strong>Try another category.</div>`;
+  const more=discoverBooks.length&&discoverHasMore&&!discoverError?`<div class="load-more" id="discoverMore"><button class="button button-primary" data-action="discover-load-more" ${discoverLoadingMore?"disabled":""}>${discoverLoadingMore?"Loading more…":"Load more recommendations"}</button></div><div class="load-more-sentinel" id="discoverSentinel" aria-hidden="true"></div>`:"";
+  return `<section class="page-heading"><div><p class="eyebrow">GET INSPIRED</p><h1>What should I read?</h1><p class="subtitle">Real recommendations from Open Library.</p></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="button button-primary" data-page="freebooks">Free Books</button><button class="button button-secondary" data-action="discover-surprise">Surprise Me</button><button class="button button-secondary" data-action="discover-refresh">Refresh</button></div></section><div class="task-filters" style="flex-wrap:wrap">${chips}</div><div class="book-grid">${cards}</div>${more}`;
+}function renderLanding(){
+  return `<section class="page-heading"><div><p class="eyebrow">DAYMARK JOURNAL</p><h1>Make Every Day Count.</h1><p class="subtitle">Your personal space to organize your thoughts, manage everyday tasks, track your goals, and make meaningful progress.</p></div><div style="display:flex;gap:12px"><button class="button button-primary" data-page="home">Open Dashboard</button><button class="button button-secondary" data-page="discover">Explore Features</button></div></section>`;
+}
+function renderHome(){
   const todayTasks=state.tasks.filter(t=>t.due===todayISO()),done=todayTasks.filter(t=>t.done).length;
   const reading=state.books.filter(b=>b.status==="reading"),completed=state.books.filter(b=>b.status==="completed");
   const pagesRead=state.books.reduce((sum,b)=>sum+(Number(b.currentPage)||0),0);
@@ -460,11 +557,14 @@ function renderDocs(){
   <section class="section"><div class="section-heading"><h2>6. Keep your data safe</h2></div>
     <p>In Settings you can export your journal as a JSON backup, import a backup, update your name, or switch themes. Your data is saved locally in your browser.</p>
   </section>
-  <section class="section"><div class="section-heading"><h2>7. Read free classics</h2></div>
-    <p>Open Free Books to browse public-domain titles from Project Gutenberg. Search by title or author, filter by category, download EPUB, PDF, or plain text, or tap <strong>Read Now</strong> to read a book in the app.</p>
+  <section class="section"><div class="section-heading"><h2>7. Browse Get Inspired and Free Books</h2></div>
+    <p>Use the <strong>Get Inspired</strong> menu to open Discover or Free Books. Discover shows recommendations from Open Library and loads more as you scroll or tap <strong>Load more recommendations</strong>. Free Books shows public-domain classics; search, filter by category, download EPUB, Kindle, PDF when available, or plain text, or tap <strong>Read Now</strong> to read in the app. The catalog also loads more automatically as you reach the end of the list.</p>
   </section>
-  <section class="section"><div class="section-heading"><h2>8. Install the app</h2></div>
-    <p>Tap <strong>Get the app</strong> in the top bar (or use your browser's "Add to Home screen") to install Daymark JOURNAL. Once installed, the bottom navigation appears and the app works offline.</p>
+  <section class="section"><div class="section-heading"><h2>8. Navigate the app</h2></div>
+    <p>The top navigation keeps Home and Library close by. <strong>Get Inspired</strong> contains Discover and Free Books, while <strong>Personal Workspace</strong> contains Journal, To Do, and Goals. On phones and installed PWAs, the menu button opens the same grouped navigation, plus Categories, Statistics, Docs, and Settings. Selecting any item closes the menu and takes you straight to that page.</p>
+  </section>
+  <section class="section"><div class="section-heading"><h2>9. Install the app</h2></div>
+    <p>Tap <strong>Get App</strong> in the top bar. On supported Android and desktop browsers, this opens the native install prompt so Daymark can be added to your home screen or app drawer. If your browser does not offer a native prompt, the app shows step-by-step installation instructions instead. Installation requires HTTPS; once installed, Daymark opens in its own window and works offline after the first visit.</p>
   </section>`;
 }
 function renderOnboardingFlow(){
@@ -481,7 +581,7 @@ function renderOnboarding(step){
   const back=step>1?`<button class="button button-secondary" data-action="onboard-back">Back</button>`:"";
   const next=step===3?`<button class="button button-primary" data-action="onboard-finish">Finish setup</button>`:`<button class="button button-primary" data-action="onboard-next">Next</button>`;
   const skip=step===3?`<a class="onboarding-skip" href="#" data-action="onboard-skip-all">Skip setup</a>`:`<a class="onboarding-skip" href="#" data-action="onboard-skip-step">Skip question</a>`;
-  return `<div class="onboarding-container"><div class="onboarding-header">${brand}<p class="onboarding-subtitle">Let's set up your space</p>${progress}</div><div class="onboarding-body">${body}</div><div class="onboarding-footer">${back}${next}${skip}</div></div>`;
+  return `<div class="onboarding-card"><div class="onboarding-container"><div class="onboarding-header">${brand}<p class="onboarding-subtitle">Let's set up your space</p>${progress}</div><div class="onboarding-body">${body}</div><div class="onboarding-footer">${back}${next}${skip}</div></div></div>`;
 }
 function renderOnboardingName(){
   const name=state.onboarding.name||"";
@@ -534,48 +634,94 @@ function completeOnboarding(){
   renderPage();
   showToast("Welcome to Daymark, "+escapeHTML(state.profile.name)+"!");
 }
-async function fetchDiscover(cat,force=false){
+async function fetchDiscover(cat,force=false,append=false){
   const target=cat||discoverCategory;
   const changed=target!==discoverCategory;
+  if(append&&(changed||discoverLoading||discoverLoadingMore||!discoverHasMore))return;
+  if(!append&&discoverLoading&&!changed)return;
   discoverCategory=target;
-  if(discoverLoading&&!changed)return;
-  if(changed){discoverBooks=[];discoverError="";}
+
+  if(append){
+    const nextPage=discoverPage+1;
+    const requestId=++discoverRequest;
+    discoverLoadingMore=true;discoverError="";
+    if(currentPage==="discover")renderPage();
+    try{
+      const result=await requestDiscoverBooks(discoverCategory,nextPage);
+      if(requestId!==discoverRequest)return;
+      const seen=new Set(discoverBooks.map(book=>book.key||`${book.title}|${book.author}`));
+      const fresh=result.books.filter(book=>!seen.has(book.key||`${book.title}|${book.author}`));
+      if(fresh.length)discoverBooks=discoverBooks.concat(fresh);
+      discoverPage=nextPage;
+      discoverHasMore=result.hasMore&&fresh.length>0;
+      writeDiscoverCache(discoverCategory,discoverBooks,discoverPage,discoverHasMore);
+    }catch(error){
+      if(requestId===discoverRequest)showToast("Could not load more recommendations.");
+    }finally{
+      if(requestId===discoverRequest){
+        discoverLoadingMore=false;
+        if(currentPage==="discover")renderPage();
+      }
+    }
+    return;
+  }
+
+  if(changed){
+    discoverBooks=[];
+    discoverError="";
+    discoverPage=1;
+    discoverHasMore=true;
+  }
   const requestId=++discoverRequest;
   const cached=force?null:readDiscoverCache()[discoverCategory];
-  if(cached&&cached.books&&cached.books.length){
-    discoverBooks=cached.books;discoverError="";discoverLoading=false;
-    renderPage();
+  if(cached&&Array.isArray(cached.books)&&cached.books.length){
+    discoverBooks=cached.books;
+    discoverPage=Number(cached.page)||1;
+    discoverHasMore=cached.hasMore!==false;
+    discoverError="";
+    discoverLoading=false;
+    if(currentPage==="discover")renderPage();
     if(Date.now()-(cached.ts||0)<86400000)return;
   }
   discoverLoading=true;discoverError="";
-  if(!discoverBooks.length)renderPage();
+  if(!discoverBooks.length&&currentPage==="discover")renderPage();
   let settled=false;
   const fallbackTimer=setTimeout(()=>{
     if(settled||requestId!==discoverRequest)return;
     settled=true;
     if(!discoverBooks.length){
       discoverBooks=fallbackBooks(discoverCategory);
+      discoverPage=1;
+      discoverHasMore=false;
       discoverLoading=false;
-      renderPage();
+      discoverLoadingMore=false;
+      discoverError="Could not reach Open Library. Showing sample recommendations.";
+      if(currentPage==="discover")renderPage();
     }
   },DISCOVER_TIMEOUT);
   try{
-    const books=await requestDiscoverBooks(discoverCategory);
+    const result=await requestDiscoverBooks(discoverCategory,1);
     clearTimeout(fallbackTimer);
     if(requestId!==discoverRequest)return;
     settled=true;
-    discoverBooks=books;
-    discoverError=books.length?"":"No results found.";
+    discoverBooks=result.books;
+    discoverPage=1;
+    discoverHasMore=result.hasMore;
+    discoverError=result.books.length?"":"No results found.";
     discoverLoading=false;
-    if(books.length)writeDiscoverCache(discoverCategory,books);
+    discoverLoadingMore=false;
+    if(result.books.length)writeDiscoverCache(discoverCategory,discoverBooks,discoverPage,discoverHasMore);
     if(currentPage==="discover")renderPage();
   }catch(e){
     clearTimeout(fallbackTimer);
     if(requestId!==discoverRequest||settled)return;
     settled=true;
     discoverBooks=fallbackBooks(discoverCategory);
+    discoverPage=1;
+    discoverHasMore=false;
     discoverLoading=false;
-    if(!discoverBooks.length)discoverError="Could not load recommendations.";
+    discoverLoadingMore=false;
+    discoverError="Could not reach Open Library. Showing sample recommendations.";
     if(currentPage==="discover")renderPage();
   }
 }function bindPageEvents(){
@@ -776,10 +922,21 @@ function freeBookFormats(book){
   return {
     html,
     epub:pick(mime=>mime.startsWith("application/epub+zip")),
+    kindle:pick(mime=>mime.startsWith("application/x-mobipocket-ebook")),
     pdf:pick(mime=>mime.startsWith("application/pdf")),
     text:pick(mime=>mime.startsWith("text/plain")),
+    archive:entries.find(([mime,url])=>(mime.toLowerCase()==="application/zip"||mime.toLowerCase()==="application/octet-stream")&&/\.zip(?:$|\?)/i.test(url))?.[1]||"",
     cover:pick(mime=>mime.startsWith("image/jpeg")||mime.startsWith("image/png"))
   };
+}
+function downloadUrl(book,url,kind){
+  const clean=String(url||"").replace(/^http:/i,"https:");
+  if(!clean)return "";
+  if(kind==="text"&&/\.txt\.utf-8(?:$|\?)/i.test(clean)){
+    const id=encodeURIComponent(book.id);
+    return `https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`;
+  }
+  return clean;
 }
 function gutenbergLanding(book){
   return `https://www.gutenberg.org/ebooks/${encodeURIComponent(book.id)}`;
@@ -788,7 +945,6 @@ function gutenbergReaderUrl(book,html){
   if(!html)return "";
   const id=encodeURIComponent(book.id);
   if(/\.html\.images$/i.test(html))return `https://www.gutenberg.org/cache/epub/${id}/pg${id}-images.html`;
-  if(/\.html$/i.test(html))return `https://www.gutenberg.org/cache/epub/${id}/pg${id}-h.html`;
   return html.replace(/^http:/i,"https:");
 }
 function freeBookAuthor(book){
@@ -798,7 +954,7 @@ function freeBookAuthor(book){
 function freeBookDescription(book){
   const summary=Array.isArray(book.summaries)&&book.summaries.length?book.summaries[0]:"";
   const subjects=Array.isArray(book.subjects)&&book.subjects.length?book.subjects.slice(0,2).join(" · "):"";
-  return shortText(summary||subjects||"A public-domain book from Project Gutenberg.",180);
+  return shortText(summary||subjects||"A timeless public-domain classic.",180);
 }
 function freeBookCard(book){
   const formats=freeBookFormats(book);
@@ -807,20 +963,22 @@ function freeBookCard(book){
   const landing=gutenbergLanding(book);
   const readerUrl=gutenbergReaderUrl(book,formats.html);
   const downloads=[];
-  if(formats.epub)downloads.push({label:"EPUB",url:formats.epub});
-  if(formats.pdf)downloads.push({label:"PDF",url:formats.pdf});
-  if(formats.text)downloads.push({label:"Plain text",url:formats.text});
+  if(formats.epub)downloads.push({label:"EPUB",url:downloadUrl(book,formats.epub,"epub")});
+  if(formats.kindle)downloads.push({label:"Kindle",url:downloadUrl(book,formats.kindle,"kindle")});
+  if(formats.pdf)downloads.push({label:"PDF",url:downloadUrl(book,formats.pdf,"pdf")});
+  if(formats.text)downloads.push({label:"Plain text",url:downloadUrl(book,formats.text,"text")});
+  if(formats.archive)downloads.push({label:"HTML archive",url:downloadUrl(book,formats.archive,"archive")});
   const readButton=readerUrl?`<button class="button button-primary freebook-read" data-action="freebook-read" data-id="${escapeHTML(String(book.id))}">Read Now</button>`:`<a class="button button-primary freebook-read" href="${escapeHTML(landing)}" target="_blank" rel="noopener">Read Now</a>`;
-  const downloadMenu=`<details class="download-menu"><summary class="button button-secondary">Download</summary><div class="download-menu-list">${downloads.map(item=>`<a href="${escapeHTML(item.url)}" target="_blank" rel="noopener">${escapeHTML(item.label)}</a>`).join("")}<a href="${escapeHTML(landing)}" target="_blank" rel="noopener">Official book page</a></div></details>`;
-  return `<article class="freebook-card"><div class="freebook-cover"><span class="freebook-cover-fallback">${escapeHTML(title)}</span>${formats.cover?`<img src="${escapeHTML(formats.cover)}" alt="Cover of ${escapeHTML(title)}" loading="lazy" onerror="this.style.display='none'">`:""}<span class="free-tag">FREE</span></div><div class="freebook-body"><span class="pill free-pill">Project Gutenberg</span><h3>${escapeHTML(title)}</h3><p class="freebook-author">${escapeHTML(author)}</p><p class="freebook-desc">${escapeHTML(freeBookDescription(book))}</p><div class="freebook-actions">${readButton}${downloadMenu}</div></div></article>`;
+  const downloadMenu=`<details class="download-menu"><summary class="button button-secondary">Download</summary><div class="download-menu-list">${downloads.map(item=>`<a href="${escapeHTML(item.url)}" target="_blank" rel="noopener" download>${escapeHTML(item.label)}</a>`).join("")}<a href="${escapeHTML(landing)}" target="_blank" rel="noopener">Source page</a></div></details>`;
+  return `<article class="freebook-card"><div class="freebook-cover"><span class="freebook-cover-fallback">${escapeHTML(title)}</span>${formats.cover?`<img src="${escapeHTML(formats.cover)}" alt="Cover of ${escapeHTML(title)}" loading="lazy" onerror="this.style.display='none'">`:""}<span class="free-tag">FREE</span></div><div class="freebook-body"><span class="pill free-pill">Public domain</span><h3>${escapeHTML(title)}</h3><p class="freebook-author">${escapeHTML(author)}</p><p class="freebook-desc">${escapeHTML(freeBookDescription(book))}</p><div class="freebook-actions">${readButton}${downloadMenu}</div></div></article>`;
 }
 function renderFreeBooks(){
   const chips=FREE_BOOKS_TOPICS.map(topic=>`<button class="filter-btn ${freeBooksTopic===topic.value?"active":""}" data-freebooks-topic="${topic.value}">${topic.label}</button>`).join("");
-  const cards=freeBooks.length?freeBooks.map(freeBookCard).join(""):freeBooksLoading?`<div class="empty-state"><strong>Loading free books…</strong><div>Fetching public-domain titles from Project Gutenberg.</div></div>`:freeBooksError?`<div class="empty-state"><strong>${escapeHTML(freeBooksError)}</strong><div>Project Gutenberg may be temporarily unavailable.</div><button class="button button-secondary" data-action="freebooks-retry" style="margin-top:12px">Try again</button></div>`:`<div class="empty-state"><strong>No books found.</strong><div>Try a different search or category.</div></div>`;
+  const cards=freeBooks.length?freeBooks.map(freeBookCard).join(""):freeBooksLoading?`<div class="empty-state"><strong>Loading free books…</strong><div>Finding public-domain classics.</div></div>`:freeBooksError?`<div class="empty-state"><strong>${escapeHTML(freeBooksError)}</strong><div>The free book catalog may be temporarily unavailable.</div><button class="button button-secondary" data-action="freebooks-retry" style="margin-top:12px">Try again</button></div>`:`<div class="empty-state"><strong>No books found.</strong><div>Try a different search or category.</div></div>`;
   const count=freeBooks.length?`<p class="freebooks-count">Showing ${freeBooks.length}${freeBooksCount>freeBooks.length?` of ${freeBooksCount}`:""} free books${freeBooksLoading?" · Updating catalog…":""}</p>`:"";
-  const notice=freeBooks.length&&freeBooksError?`<div class="freebooks-notice"><span>${escapeHTML(freeBooksError)} Showing a starter collection from Project Gutenberg.</span><button class="button button-secondary" data-action="freebooks-retry">Retry full catalog</button></div>`:"";
-  const more=freeBooksNext?`<div class="freebooks-more"><button class="button button-primary" data-action="freebooks-load-more" ${freeBooksLoadingMore?"disabled":""}>${freeBooksLoadingMore?"Loading more…":"Load more books"}</button></div>`:"";
-  return `<section class="page-heading"><div><p class="eyebrow">FREE BOOKS LIBRARY</p><h1>Read a classic, free.</h1><p class="subtitle">Public-domain books from Project Gutenberg with covers, downloads, and instant reading.</p></div><span class="pill free-pill">Powered by Gutendex</span></section><div class="toolbar freebooks-toolbar"><input class="field search-field" id="freeBooksSearch" placeholder="Search by title or author..." value="${escapeHTML(freeBooksQuery)}" aria-label="Search free books by title or author"></div><div class="task-filters">${chips}</div>${count}${notice}<div class="freebook-grid">${cards}</div>${more}`;
+  const notice=freeBooks.length&&freeBooksError?`<div class="freebooks-notice"><span>${escapeHTML(freeBooksError)} Showing the starter shelf instead.</span><button class="button button-secondary" data-action="freebooks-retry">Retry full catalog</button></div>`:"";
+  const more=freeBooksNext?`<div class="freebooks-more"><button class="button button-primary" data-action="freebooks-load-more" ${freeBooksLoadingMore?"disabled":""}>${freeBooksLoadingMore?"Loading more…":"Load more books"}</button></div><div class="load-more-sentinel" id="freeBooksSentinel" aria-hidden="true"></div>`:"";
+  return `<section class="page-heading"><div><p class="eyebrow">FREE BOOKS LIBRARY</p><h1>Read a classic, free.</h1><p class="subtitle">A hand-picked shelf of public-domain classics with covers, downloads, and instant reading.</p></div><span class="pill free-pill">Always free</span></section><div class="toolbar freebooks-toolbar"><input class="field search-field" id="freeBooksSearch" placeholder="Search by title or author..." value="${escapeHTML(freeBooksQuery)}" aria-label="Search free books by title or author"></div><div class="task-filters">${chips}</div>${count}${notice}<div class="freebook-grid">${cards}</div>${more}`;
 }
 function renderFreeBooksView(expectedKey){
   if(currentPage!=="freebooks" && currentPage!=="free-books")return;
@@ -864,8 +1022,18 @@ async function loadFreeBooks(reset=true,force=false){
     const data=await res.json();
     if(requestId!==freeBooksRequest)return;
     const results=Array.isArray(data.results)?data.results:[];
-    if(reset&&!results.length){freeBooks=fallbackFreeBooks();freeBooksNext="";freeBooksCount=freeBooks.length;freeBooksError="";}
-    else{freeBooks=reset?results:[...freeBooks,...results];freeBooksNext=data.next||"";freeBooksCount=Number(data.count)||freeBooks.length;freeBooksError="";}
+    if(reset&&!results.length){freeBooks=fallbackFreeBooks();freeBooksNext="";freeBooksCount=freeBooks.length;freeBooksError="No books matched. Showing a starter collection instead.";}
+    else{
+      if(reset){
+        freeBooks=results;
+      }else{
+        const seen=new Set(freeBooks.map(book=>String(book.id)));
+        freeBooks=freeBooks.concat(results.filter(book=>!seen.has(String(book.id))));
+      }
+      freeBooksNext=data.next&&data.next!==key?data.next:"";
+      freeBooksCount=Number(data.count)||freeBooks.length;
+      freeBooksError="";
+    }
     freeBooksCache[key]={books:freeBooks,next:freeBooksNext,count:freeBooksCount,ts:Date.now()};
   }catch(error){
     clearTimeout(timer);
@@ -877,7 +1045,7 @@ async function loadFreeBooks(reset=true,force=false){
         freeBooks=fallbackFreeBooks();
         freeBooksNext="";
         freeBooksCount=freeBooks.length;
-        freeBooksError="";
+        freeBooksError="Could not load the full catalog.";
       }
     }else{
       showToast("Could not load more books.");
@@ -911,9 +1079,9 @@ function renderReader(){
   const landing=gutenbergLanding(book);
   const readerUrl=gutenbergReaderUrl(book,formats.html);
   if(!readerUrl){
-    return `<section class="page-heading"><div><p class="eyebrow">READER</p><h1>${escapeHTML(book.title||"Untitled")}</h1><p class="subtitle">${escapeHTML(freeBookAuthor(book))}</p></div>${back}</section><div class="empty-state"><strong>No HTML reading version is available.</strong><div>Open the official Project Gutenberg page to choose a reading format.</div><a class="button button-primary" style="margin-top:14px" href="${escapeHTML(landing)}" target="_blank" rel="noopener">Open on Project Gutenberg</a></div>`;
+    return `<section class="page-heading"><div><p class="eyebrow">READER</p><h1>${escapeHTML(book.title||"Untitled")}</h1><p class="subtitle">${escapeHTML(freeBookAuthor(book))}</p></div>${back}</section><div class="empty-state"><strong>No in-app reading version is available.</strong><div>Open the source page to choose a reading format.</div><a class="button button-primary" style="margin-top:14px" href="${escapeHTML(landing)}" target="_blank" rel="noopener">Open source page</a></div>`;
   }
-  return `<section class="reader-page"><div class="reader-toolbar"><div class="reader-toolbar-main">${back}<div><p class="eyebrow">READING NOW</p><h1>${escapeHTML(book.title||"Untitled")}</h1><p class="subtitle">${escapeHTML(freeBookAuthor(book))}</p></div></div><div class="reader-controls" role="group" aria-label="Reader settings"><button class="icon-btn" data-action="reader-font-dec" aria-label="Decrease text size">A-</button><button class="icon-btn" data-action="reader-font-inc" aria-label="Increase text size">A+</button><button class="icon-btn" data-action="reader-theme" aria-label="Toggle reading theme">◐</button><a class="button button-secondary" href="${escapeHTML(readerUrl)}" target="_blank" rel="noopener">Open in new tab</a></div></div><div class="reader-shell ${readerDark?"reader-dark":""}" id="readerShell"><iframe id="gutenbergReaderFrame" src="${escapeHTML(readerUrl)}" title="${escapeHTML(book.title||"Book")}" referrerpolicy="no-referrer"></iframe></div><div class="reader-note"><span class="pill free-pill">Project Gutenberg</span><span class="subtitle">Public-domain edition, served by Project Gutenberg.</span><a href="${escapeHTML(landing)}" target="_blank" rel="noopener">View official book page</a></div></section>`;
+  return `<section class="reader-page"><div class="reader-toolbar"><div class="reader-toolbar-main">${back}<div><p class="eyebrow">READING NOW</p><h1>${escapeHTML(book.title||"Untitled")}</h1><p class="subtitle">${escapeHTML(freeBookAuthor(book))}</p></div></div><div class="reader-controls" role="group" aria-label="Reader settings"><button class="icon-btn" data-action="reader-font-dec" aria-label="Decrease text size">A-</button><button class="icon-btn" data-action="reader-font-inc" aria-label="Increase text size">A+</button><button class="icon-btn" data-action="reader-theme" aria-label="Toggle reading theme">◐</button><a class="button button-secondary" href="${escapeHTML(readerUrl)}" target="_blank" rel="noopener">Open in new tab</a></div></div><div class="reader-shell ${readerDark?"reader-dark":""}" id="readerShell"><iframe id="gutenbergReaderFrame" src="${escapeHTML(readerUrl)}" title="${escapeHTML(book.title||"Book")}" referrerpolicy="no-referrer"></iframe></div><div class="reader-note"><span class="pill free-pill">Public domain</span><span class="subtitle">Public-domain edition.</span><a href="${escapeHTML(landing)}" target="_blank" rel="noopener">View source page</a></div></section>`;
 }
 function openFreeBookReader(book){
   readerBook=book;
@@ -927,7 +1095,7 @@ function exportData(){
   const blob=new Blob([JSON.stringify({app:"DAYMARK JOURNAL",version:2,exportedAt:new Date().toISOString(),data:state},null,2)],{type:"application/json"});
   const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download="daymark-journal-backup.json";a.click();URL.revokeObjectURL(url);showToast("Exported");
 }
-function importData(){const input=document.createElement("input");input.type="file";input.accept=".json,application/json";input.onchange=async()=>{const file=input.files?.[0];if(!file)return;try{const parsed=JSON.parse(await file.text()),incoming=parsed.data||parsed;if(!incoming.books&&!incoming.tasks&&!incoming.entries&&!incoming.goals)throw Error("Invalid backup.");if(!confirm("Replace current data?"))return;state={...structuredClone(defaultState),...incoming,profile:{...defaultState.profile,...incoming.profile},settings:{...defaultState.settings,...incoming.settings},goals:incoming.goals||[]};persist();renderPage();showToast("Imported");}catch(err){showToast(err.message||"Could not import.");}};input.click();}
+function importData(){const input=document.createElement("input");input.type="file";input.accept=".json,application/json";input.onchange=async()=>{const file=input.files?.[0];if(!file)return;try{const parsed=JSON.parse(await file.text()),incoming=parsed.data||parsed;if(!incoming.books&&!incoming.tasks&&!incoming.entries&&!incoming.goals)throw Error("Invalid backup.");if(!confirm("Replace current data?"))return;const defaults=cloneValue(defaultState);state={...defaults,...incoming,profile:{...defaults.profile,...incoming.profile},onboarding:{...defaults.onboarding,...incoming.onboarding},settings:{...defaults.settings,...incoming.settings},goals:incoming.goals||[]};persist();renderPage();showToast("Imported");}catch(err){showToast(err.message||"Could not import.");}};input.click();}
 function saveSettings(){
   const nameInput=$("#profileName"),goalInput=$("#readingGoal"),prefInput=$("#settingsJournalPref");
   if(nameInput)state.profile.name=nameInput.value.trim()||"Daymark";
@@ -947,14 +1115,39 @@ function importJournal(){
   input.click();
 }
 async function shareApp(){const data={title:"DAYMARK JOURNAL",text:"A thoughtful space for reading, journaling, and daily goals.",url:location.href};try{if(navigator.share)await navigator.share(data);else{await navigator.clipboard.writeText(location.href);showToast("App link copied");}}catch(error){if(error.name!=="AbortError")showToast("Sharing isn't available in this browser.");}}
-function resetData(){if(!confirm("Remove all data?"))return;state=structuredClone(defaultState);persist();setPage("home");showToast("Reset"); if(goalClock)clearInterval(goalClock);}
+function resetData(){if(!confirm("Remove all data?"))return;state=cloneValue(defaultState);persist();setPage("home");showToast("Reset"); if(goalClock)clearInterval(goalClock);}
 document.addEventListener("click",e=>{
-  const pageBtn=e.target.closest("[data-page]");if(pageBtn){e.preventDefault();setPage(pageBtn.dataset.page);return;}
+  const navToggle=e.target.closest("[data-nav-toggle]");
+  if(navToggle){
+    e.preventDefault();
+    const drop=navToggle.closest("[data-nav-dropdown]");
+    const menu=$(".nav-dropdown-menu,.mobile-submenu",drop);
+    const willOpen=menu?menu.hidden:false;
+    closeNavDropdowns(drop);
+    if(menu)menu.hidden=!willOpen;
+    navToggle.setAttribute("aria-expanded",String(Boolean(willOpen)));
+    drop?.classList.toggle("open",Boolean(willOpen));
+    return;
+  }
+  const pageBtn=e.target.closest("[data-page]");
+  if(pageBtn){
+    e.preventDefault();
+    closeNavDropdowns();
+    setPage(pageBtn.dataset.page);
+    return;
+  }
+  if(!e.target.closest("[data-nav-dropdown]"))closeNavDropdowns();
+  if(!e.target.closest("#mobileMenu")&&!e.target.closest("#menuToggle")){
+    const menu=$("#mobileMenu");
+    if(menu&&!menu.hidden)closeMobileMenu();
+  }
   const actionBtn=e.target.closest("[data-action]");if(!actionBtn)return;
   const {action,id}=actionBtn.dataset;
   if(action==="freebook-read"){const book=freeBooks.find(item=>String(item.id)===String(id));if(book)openFreeBookReader(book);return;}
   if(action==="freebooks-load-more"){loadFreeBooks(false);return;}
   if(action==="freebooks-retry"){loadFreeBooks(true,true);return;}
+  if(action==="discover-load-more"){fetchDiscover(discoverCategory,false,true);return;}
+  if(action==="reload-app"){location.reload();return;}
   if(action==="reader-font-dec"){readerFontScale=Math.max(.8,Number((readerFontScale-.1).toFixed(2)));applyReaderSettings();saveReaderPrefs();return;}
   if(action==="reader-font-inc"){readerFontScale=Math.min(1.6,Number((readerFontScale+.1).toFixed(2)));applyReaderSettings();saveReaderPrefs();return;}
   if(action==="reader-theme"){readerDark=!readerDark;applyReaderSettings();saveReaderPrefs();return;}
@@ -968,7 +1161,7 @@ document.addEventListener("click",e=>{
   if(action==="onboard-next"){e.preventDefault();nextOnboardingStep();}
   if(action==="onboard-back"){e.preventDefault();prevOnboardingStep();}
   if(action==="onboard-finish"){e.preventDefault();completeOnboarding();}
-  if(action==="onboard-edit"){e.preventDefault();state.onboarding.completed=false;state.onboarding.step=1;onboardingStep=1;$("#onboarding").hidden=false;$("#appShell").hidden=true;renderOnboardingFlow();}
+  if(action==="onboard-edit"){e.preventDefault();state.onboarding.completed=false;state.onboarding.step=1;onboardingStep=1;closeMobileMenu();$("#appShell").hidden=false;$("#onboarding").hidden=false;renderOnboardingFlow();}
   if(action==="onboard-skip-step"){e.preventDefault();nextOnboardingStep();}
   if(action==="onboard-skip-all"){e.preventDefault();completeOnboarding();}
   if(action==="clear-category"){bookCategory="all";renderPage();showToast("Filter cleared");}
@@ -977,10 +1170,17 @@ document.addEventListener("click",e=>{
   if(action==="toggle-goal"){const g=state.goals.find(x=>x.id===id);if(g){g.done=!g.done;g.warnedSoon=g.done?false:g.warnedSoon;g.warnedLate=g.done?false:g.warnedLate;persist();renderPage();showToast(g.done?"Goal completed":"Marked incomplete");}}
   if(action==="delete-goal"&&confirm("Delete this goal?")){state.goals=state.goals.filter(x=>x.id!==id);persist();renderPage();showToast("Goal deleted");}
 });
-$("#menuToggle").addEventListener("click",()=>{const menu=$("#mobileMenu");menu.hidden=!menu.hidden;$("#menuToggle").setAttribute("aria-expanded",String(!menu.hidden));});
+$("#menuToggle").addEventListener("click",()=>{
+  const menu=$("#mobileMenu");
+  const willOpen=menu.hidden;
+  if(willOpen)closeNavDropdowns();
+  menu.hidden=!willOpen;
+  document.body.classList.toggle("menu-open",willOpen);
+  $("#menuToggle").setAttribute("aria-expanded",String(willOpen));
+});
 $("#closeModal").addEventListener("click",closeModal);
 $("#modalBackdrop").addEventListener("click",e=>{if(e.target===$("#modalBackdrop"))closeModal();});
-document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeModal();$("#mobileMenu").hidden=true;$("#menuToggle").setAttribute("aria-expanded","false");}});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"){closeModal();closeMobileMenu();}});
 function toggleTheme(){state.settings.theme=state.settings.theme==="dark"?"light":"dark";document.body.classList.toggle("dark",state.settings.theme==="dark");persist();if(currentPage==="settings")renderPage();showToast(`${state.settings.theme==="dark"?"Dark":"Light"} theme enabled`);}
 $("#themeToggle").addEventListener("click",toggleTheme);
 document.addEventListener("click",e=>{
@@ -991,33 +1191,74 @@ document.addEventListener("click",e=>{
   }
   if(e.target.id==="settingsTheme")toggleTheme();
 });
-$("#installBtn").addEventListener("click",async()=>{if(deferredInstallPrompt){try{deferredInstallPrompt.prompt();const choice=await deferredInstallPrompt.userChoice;if(choice.outcome==="accepted"){deferredInstallPrompt=null;updateMode();showToast("DAYMARK JOURNAL installed");}else{showToast("Installation cancelled");}}catch{showToast("Installation not available.");}}else if(isInstalled()){showToast("Already installed.");}else if(/iphone|ipad|ipod/i.test(navigator.userAgent)){showToast("To install: tap Share, then Add to Home Screen.");}else{showToast("Not installable yet. Use browser menu: Install app or Add to Home screen.");}});
-window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();deferredInstallPrompt=e;$("#installBtn").hidden=false;});
-window.addEventListener("appinstalled",()=>{deferredInstallPrompt=null;updateMode();showToast("DAYMARK JOURNAL installed");});
+function installInstructionsMarkup(){
+  const ua=navigator.userAgent;
+  let steps;
+  if(/iphone|ipad|ipod/i.test(ua)){
+    steps=["Open this site in Safari.","Tap the Share button in the browser toolbar.","Choose Add to Home Screen, then tap Add."];
+  }else if(/android/i.test(ua)){
+    steps=["Open the browser menu (the three-dot button).","Choose Install app or Add to Home screen.","Confirm the install. Daymark will appear in your app drawer."];
+  }else{
+    steps=["Open your browser menu.","Choose Install Daymark or Create shortcut.","Confirm the install to add Daymark to your apps."];
+  }
+  return `<div class="install-help"><p class="subtitle">Your browser doesn't offer an in-app install prompt right now. You can still install Daymark from the browser menu:</p><ol>${steps.map(step=>`<li>${escapeHTML(step)}</li>`).join("")}</ol><p class="subtitle">Installation requires HTTPS and a modern browser. Once installed, Daymark opens in its own window and works offline.</p></div>`;
+}
+function showInstallHelp(){openModal("Install Daymark JOURNAL",installInstructionsMarkup());}
+$("#installBtn").addEventListener("click",async()=>{
+  if(isInstalled()){showToast("Daymark is already installed.");return;}
+  if(!deferredInstallPrompt){showInstallHelp();return;}
+  const prompt=deferredInstallPrompt;
+  deferredInstallPrompt=null;
+  try{
+    prompt.prompt();
+    const choice=await prompt.userChoice;
+    if(choice.outcome==="accepted"){
+      showToast("Finishing installation…");
+    }else{
+      showToast("Installation cancelled. You can try again with Get App.");
+    }
+  }catch(error){
+    console.warn("Install prompt failed.",error);
+    showToast("Installation isn't available right now. Use your browser menu to install.");
+    showInstallHelp();
+  }finally{
+    updateMode();
+  }
+});
+window.addEventListener("beforeinstallprompt",e=>{
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  const btn=$("#installBtn");
+  if(btn)btn.hidden=isInstalled();
+});
+window.addEventListener("appinstalled",()=>{deferredInstallPrompt=null;updateMode();showToast("Daymark JOURNAL installed");});
 window.matchMedia("(display-mode: standalone)").addEventListener?.("change",updateMode);
 
 async function init(){
   updateMode();
   document.body.classList.toggle("dark", state.settings.theme === "dark");
-  await new Promise(resolve => setTimeout(resolve, 800));
-  $("#splash").style.opacity = "0";
-  setTimeout(() => {
-    $("#splash").hidden = true;
-    if(!state.onboarding.completed){
-      $("#appShell").hidden = true;
-      $("#onboarding").hidden = false;
-      renderOnboardingFlow();
-    } else {
-      $("#appShell").hidden = false;
-      currentPage = getInitialPage();
-      updateDocumentTitle(currentPage);
-      $(".nav-link,.bottom-link,#mobileMenu button").forEach(b => b.classList.toggle("active", b.dataset.page === currentPage));
-      if(currentPage === "freebooks" && !freeBooks.length) loadFreeBooks(true);
-      else if(currentPage === "discover" && !discoverBooks.length) fetchDiscover(discoverCategory);
-      renderPage();
-      if(currentPage !== "discover") prefetchDiscover(discoverCategory);
-    }
-  }, 350);
+  $("#appShell").hidden=false;
+  try{
+    currentPage=getInitialPage();
+    updateDocumentTitle(currentPage);
+    updateNavState(currentPage);
+    renderPage();
+    if(currentPage !== "discover") prefetchDiscover(discoverCategory);
+  }catch(error){
+    console.error("Daymark could not start.",error);
+    renderFatalError(error);
+  }
+  if(!state.onboarding.completed){
+    $("#appShell").hidden=false;
+    $("#onboarding").hidden=false;
+    renderOnboardingFlow();
+  }
+  requestAnimationFrame(()=>{
+    const splash=$("#splash");
+    if(!splash)return;
+    splash.style.opacity="0";
+    setTimeout(()=>{splash.hidden=true;},350);
+  });
   if("serviceWorker" in navigator && location.protocol !== "file:"){
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
@@ -1038,8 +1279,17 @@ window.addEventListener("hashchange", () => {
   const p = getInitialPage();
   setPage(p, false);
 });
+window.addEventListener("resize", () => {
+  if(window.innerWidth > 980) closeMobileMenu();
+});
 
 init();
+
+
+
+
+
+
 
 
 

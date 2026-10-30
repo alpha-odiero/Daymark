@@ -1,0 +1,53 @@
+{
+  "id": "./",
+  "name": "DAYMARK JOURNAL",
+  "short_name": "Daymark",
+  "description": "Your books, thoughts, and daily goals in one thoughtful space.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "lang": "en",
+  "dir": "ltr",
+  "background_color": "#f7f6f3",
+  "theme_color": "#f7f6f3",
+  "categories": ["productivity", "books", "lifestyle", "education"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Discover books",
+      "short_name": "Discover",
+      "url": "./#discover"
+    },
+    {
+      "name": "Free Books",
+      "short_name": "Free Books",
+      "url": "./#freebooks"
+    },
+    {
+      "name": "Write a journal entry",
+      "short_name": "Journal",
+      "url": "./#journal"
+    }
+  ]
+}
