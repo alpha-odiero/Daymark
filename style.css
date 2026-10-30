@@ -1,6 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 
-:root{--bg:#C6C1F4;--surface:#FFFFFF;--text:#17152B;--muted:#9292A3;--line:#E9E8F0;--accent:#B9B1F2;--accent-hover:#a8a0e6;--navy:#17132D;--blue:#46b8f2;--pink:#EC83D8;--orange:#FFB467;--green:#18845b;--shadow:0 10px 30px rgba(30,26,18,.05);--radius:20px;--workspace:#F5F5FA}
+:root{--bg:#f7f6f3;--surface:#fff;--text:#171717;--muted:#6f6a62;--line:#e7e2d9;--yellow:#ffc400;--yellow-hover:#efb400;--navy:#171a30;--blue:#46b8f2;--purple:#b58af4;--peach:#ffad72;--green:#18845b;--shadow:0 10px 30px rgba(30,26,18,.05);--radius:20px}
 *{box-sizing:border-box}
 html,body{overflow-x:hidden}
 body{margin:0;background:var(--bg);color:var(--text);font-family:"DM Sans",system-ui,-apple-system,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -405,4 +405,5 @@ body.dark .reader-note a{color:#ffd95e}
   .reader-shell{height:70vh;min-height:360px;border-radius:14px}
   .reader-note{flex-direction:column;align-items:flex-start;gap:6px}
 }
+
 
